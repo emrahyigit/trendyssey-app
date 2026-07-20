@@ -1,0 +1,17 @@
+# macOS
+.DS_Store
+
+# Xcode
+xcuserdata/
+DerivedData/
+build/
+*.xcuserstate
+
+# Local tool settings
+.claude/settings.local.json
+
+# Secrets — never commit signing keys or API keys
+*.p8
+*.pem
+*.mobileprovision
+.env
