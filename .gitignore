@@ -15,3 +15,5 @@ build/
 *.pem
 *.mobileprovision
 .env
+supabase/.temp/
+xcuserdata/
