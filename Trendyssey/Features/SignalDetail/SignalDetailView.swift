@@ -263,7 +263,7 @@ struct SignalDetailView: View {
                             }.padding(.top, 4)
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(event.status.title).font(.subheadline.bold()).foregroundStyle(journeyColor(event.status))
-                                Text(event.time.formatted(date: .abbreviated, time: .shortened))
+                                Text(L10n.dateTime(event.time))
                                     .font(.caption2).foregroundStyle(TrendysseyColor.secondaryText)
                             }
                             Spacer()

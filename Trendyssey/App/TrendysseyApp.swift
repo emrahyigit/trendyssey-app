@@ -22,6 +22,11 @@ struct TrendysseyApp: App {
 final class TrendysseyAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         UNUserNotificationCenter.current().delegate = self
+        #if DEBUG
+        // Screenshot/UI-test hook: `-uiTestSkipNotificationPrompt YES` keeps
+        // the permission alert from covering the UI.
+        if UserDefaults.standard.bool(forKey: "uiTestSkipNotificationPrompt") { return true }
+        #endif
         Task {
             let settings = await UNUserNotificationCenter.current().notificationSettings()
             switch settings.authorizationStatus {

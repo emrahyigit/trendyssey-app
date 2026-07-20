@@ -70,7 +70,7 @@ struct DailyRecapView: View {
                                     HStack {
                                         VStack(alignment: .leading, spacing: 3) {
                                             Text(entry.symbol.replacingOccurrences(of: "USDT", with: "")).font(.subheadline.bold())
-                                            Text(entry.entryDate.formatted(date: .omitted, time: .shortened))
+                                            Text(L10n.time(entry.entryDate))
                                                 .font(.caption2).foregroundStyle(TrendysseyColor.secondaryText)
                                         }
                                         Spacer()

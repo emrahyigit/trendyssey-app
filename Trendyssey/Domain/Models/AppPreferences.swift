@@ -22,6 +22,20 @@ enum L10n {
     nonisolated static func text(_ english: String, _ turkish: String) -> String {
         isTurkish ? turkish : english
     }
+
+    /// Locale matching the in-app language so formatted values stay
+    /// consistent with the UI language instead of the device locale.
+    nonisolated static var locale: Locale {
+        Locale(identifier: isTurkish ? "tr_TR" : "en_US")
+    }
+
+    nonisolated static func dateTime(_ date: Date) -> String {
+        date.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened, locale: locale))
+    }
+
+    nonisolated static func time(_ date: Date) -> String {
+        date.formatted(Date.FormatStyle(date: .omitted, time: .shortened, locale: locale))
+    }
 }
 
 enum AppThemeMode: String, CaseIterable, Identifiable {

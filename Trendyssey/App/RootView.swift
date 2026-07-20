@@ -3,7 +3,7 @@ import SwiftUI
 struct RootView: View {
     @Environment(AppEnvironment.self) private var environment
     @Environment(\.scenePhase) private var scenePhase
-    @State private var selection: AppTab = .dashboard
+    @State private var selection: AppTab = RootView.initialTab
     @State private var dashboardPath = NavigationPath()
 
     var body: some View {
@@ -36,6 +36,15 @@ struct RootView: View {
             if let pending = UserDefaults.standard.string(forKey: "trendyssey.pendingPushNotificationId") {
                 openPush(pending)
             }
+            #if DEBUG
+            // Screenshot/UI-test hook: `-uiTestOpenSignal ATOMUSDT` opens that
+            // signal's detail page on launch.
+            if let symbol = UserDefaults.standard.string(forKey: "uiTestOpenSignal"),
+               let signal = try? await environment.marketService.allSymbols()
+                   .first(where: { $0.symbol == symbol || $0.name == symbol }) {
+                dashboardPath.append(signal)
+            }
+            #endif
         }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
@@ -60,3 +69,20 @@ struct RootView: View {
 }
 
 private enum AppTab { case dashboard, scanner, watchlist, settings }
+
+extension RootView {
+    // Screenshot/UI-test hook: select the initial tab via launch argument,
+    // e.g. `-uiTestTab scanner`. Debug builds only.
+    fileprivate static var initialTab: AppTab {
+        #if DEBUG
+        switch UserDefaults.standard.string(forKey: "uiTestTab") {
+        case "scanner": return .scanner
+        case "watchlist": return .watchlist
+        case "settings": return .settings
+        default: return .dashboard
+        }
+        #else
+        return .dashboard
+        #endif
+    }
+}
