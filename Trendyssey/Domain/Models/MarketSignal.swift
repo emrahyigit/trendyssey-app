@@ -9,8 +9,8 @@ enum CryptoAssetUniverse {
 
         // Stablecoins and synthetic fiat units.
         "AEUR", "BUSD", "CRVUSD", "DAI", "EURI", "EURS", "EURC", "FDUSD", "FRAX", "GHO",
-        "GUSD", "LUSD", "PYUSD", "RLUSD", "SUSD", "TUSD", "USD1", "USDC", "USDP", "USDS",
-        "UST", "USTC", "XUSD",
+        "GUSD", "LUSD", "MIM", "PYUSD", "RLUSD", "SUSD", "TUSD", "U", "USD1", "USDC",
+        "USDP", "USDS", "UST", "USTC", "XUSD",
 
         // Gold and commodity-backed tokens.
         "DGX", "PAXG", "PMGT", "XAUT"
