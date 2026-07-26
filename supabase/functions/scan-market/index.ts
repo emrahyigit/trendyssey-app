@@ -625,7 +625,10 @@ Deno.serve(async (req) => {
       const results = await Promise.all(batch.map(async (symbol: any) => {
         try {
           const candles = await fetchClosedCandles(symbol.symbol, timeframe);
-          if (candles.length < 250) return 0;
+          // The pattern analyzer works from ~30 candles; only the EMA engine
+          // needs deep history. Gating per model keeps recently listed coins
+          // covered on the timeframes where 250 candles simply do not exist yet.
+          if (candles.length < 30) return 0;
           await ingestCandleTail(supabase, symbol.id, timeframe, candles);
           let completedModels = 0;
           for (const model of models) {
@@ -633,6 +636,7 @@ Deno.serve(async (req) => {
               if (DOUBLE_PATTERN_DIRECTIONS[model.slug]) {
                 await scanDoublePattern(supabase, model, symbol, timeframe, candles);
               } else {
+                if (candles.length < 250) continue;
                 await scanEMA(supabase, model, symbol, timeframe, candles);
               }
               completedModels += 1;
