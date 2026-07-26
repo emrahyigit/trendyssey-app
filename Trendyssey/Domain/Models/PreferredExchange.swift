@@ -29,14 +29,20 @@ enum PreferredExchange: String, CaseIterable, Identifiable, Sendable {
         self == .binance || self == .binanceTR
     }
 
-    /// A native-app URL scheme when the venue has a reliable one; the web URL
-    /// below doubles as a universal link that opens the installed app anyway.
+    /// The venue's native URL scheme, tried first. A scheme that is not
+    /// installed (or not registered) simply fails to open, and the caller
+    /// falls back to the web URL below — so attempting one is always safe.
     nonisolated func appURL(symbol: String) -> URL? {
-        switch self {
+        let base = String(symbol.uppercased().replacingOccurrences(of: "USDT", with: ""))
+        return switch self {
         case .binance:
             URL(string: "bnc://app.binance.com/trade/trade?at=spot&symbol=\(symbol.lowercased())")
-        case .binanceTR, .okx, .coinbase:
-            nil
+        case .binanceTR:
+            URL(string: "trbinance://trade?symbol=\(base)_USDT")
+        case .okx:
+            URL(string: "okx://main/trade?instId=\(base)-USDT")
+        case .coinbase:
+            URL(string: "coinbase://asset/\(base.lowercased())")
         }
     }
 

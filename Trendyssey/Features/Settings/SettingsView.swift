@@ -165,13 +165,6 @@ struct SettingsView: View {
                 Picker(L10n.text("Exchange", "Borsa"), selection: $preferredExchange) {
                     ForEach(PreferredExchange.allCases) { exchange in Text(exchange.title).tag(exchange.rawValue) }
                 }
-                Text(L10n.text(
-                    "The trade button on a coin page opens this exchange. Analysis data always comes from Trendyssey's own servers.",
-                    "Coin sayfasındaki işlem düğmesi bu borsayı açar. Analiz verileri her zaman Trendyssey'in kendi sunucularından gelir."
-                ))
-                .font(.caption)
-                .foregroundStyle(TrendysseyColor.secondaryText)
-                LabeledContent(L10n.text("Market", "Market"), value: "Binance Spot")
             }
             Section(L10n.text("ABOUT", "HAKKINDA")) {
                 NavigationLink(L10n.text("Analysis methodology", "Analiz metodolojisi")) { LegalInfoView(title: L10n.text("Analysis methodology", "Analiz metodolojisi"), document: LegalCopy.methodology) }
