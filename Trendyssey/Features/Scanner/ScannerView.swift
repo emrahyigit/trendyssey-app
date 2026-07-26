@@ -14,11 +14,10 @@ struct ScannerView: View {
         }
     }
 
-    /// Statuses the on-device EMA journey can actually produce, in journey order.
+    /// Journey statuses the server records, in journey order.
     private static let filterStatuses: [SignalStatus] = [
         .watching, .preBreakout, .breakoutDetected, .retest, .confirmed, .failed
     ]
-    private static let warmupLimit = 120
 
     @Environment(AppEnvironment.self) private var environment
     @State private var query = ""
@@ -27,18 +26,19 @@ struct ScannerView: View {
     @State private var isLoading = true
     @State private var statusFilter: SignalStatus?
     @State private var sortOption: SortOption = .confidence
-    @State private var analyses: [String: EMAJourneyAnalysis] = [:]
-    @State private var analyzedCount = 0
-    @State private var warmupTotal = 0
     @AppStorage("preferredTimeframe") private var preferredTimeframe = "15m"
-    @AppStorage(AnalysisModelSelection.storageKey) private var preferredAnalysisModel = AnalysisModelSelection.defaultSlug
+    @AppStorage(JourneyModel.storageKey) private var journeyModel = JourneyModel.emaCross.rawValue
 
-    private func phase(for signal: MarketSignal) -> SignalStatus {
-        analyses[signal.symbol]?.currentPhase ?? signal.status
+    private var journeyDirection: JourneyDirection {
+        (JourneyModel(rawValue: journeyModel) ?? .emaCross).direction
     }
 
+    // Filters and sorting run on the server-recorded phase and score — the
+    // same values the rows display and the pushes were sent from.
+    private func phase(for signal: MarketSignal) -> SignalStatus { signal.status }
+
     private func confidence(for signal: MarketSignal) -> Int {
-        analyses[signal.symbol]?.confidence ?? (signal.hasScore ? signal.confidence : 0)
+        signal.hasScore ? signal.confidence : 0
     }
 
     private var signals: [MarketSignal] {
@@ -101,43 +101,10 @@ struct ScannerView: View {
         .searchable(text: $query, prompt: L10n.text("Search USDT pair", "USDT paritesi ara"))
         .navigationDestination(item: $selectedSignal) { SignalDetailView(signal: $0) }
         .overlay { if isLoading { ProgressView(L10n.text("Loading live market…", "Canlı piyasa yükleniyor…")).tint(TrendysseyColor.accent) } }
-        .task(id: "\(preferredAnalysisModel)|\(preferredTimeframe)") {
+        .task(id: "\(preferredTimeframe)|\(journeyModel)") {
             isLoading = true
             liveSignals = (try? await environment.marketService.allSymbols()) ?? []
             isLoading = false
-            await warmUpAnalyses()
-        }
-    }
-
-    /// Analyzes the highest-volume coins up front so status filters and the
-    /// confidence sort work on the same on-device values the rows display.
-    /// Results are applied in a single pass at the end so the list re-orders
-    /// once instead of reshuffling while the analysis streams in.
-    @MainActor private func warmUpAnalyses() async {
-        let symbols = liveSignals
-            .filter { $0.hasScore || environment.subscriptionStore.isSubscribed }
-            .sorted { $0.quoteVolume24h > $1.quoteVolume24h }
-            .prefix(Self.warmupLimit)
-            .map(\.symbol)
-        warmupTotal = symbols.count
-        analyzedCount = 0
-        var collected: [String: EMAJourneyAnalysis] = [:]
-        for batchStart in stride(from: 0, to: symbols.count, by: 8) {
-            guard !Task.isCancelled else { return }
-            let batch = Array(symbols[batchStart..<min(batchStart + 8, symbols.count)])
-            await withTaskGroup(of: (String, EMAJourneyAnalysis?).self) { group in
-                for symbol in batch {
-                    group.addTask { (symbol, await EMAAnalysisCache.shared.analysis(for: symbol)) }
-                }
-                for await (symbol, analysis) in group {
-                    if let analysis { collected[symbol] = analysis }
-                }
-            }
-            analyzedCount = min(warmupTotal, analyzedCount + batch.count)
-        }
-        withAnimation(.easeInOut(duration: 0.3)) {
-            analyses = collected
-            warmupTotal = 0
         }
     }
 
@@ -147,10 +114,6 @@ struct ScannerView: View {
                 Label(L10n.text("Filters", "Filtreler"), systemImage: "line.3.horizontal.decrease")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(TrendysseyColor.primaryText)
-                if warmupTotal > 0 {
-                    ProgressView().controlSize(.mini)
-                        .accessibilityLabel(L10n.text("Analyzing the market", "Piyasa analiz ediliyor"))
-                }
                 Spacer()
                 Menu {
                     Picker(L10n.text("Sort", "Sıralama"), selection: $sortOption) {
@@ -179,7 +142,7 @@ struct ScannerView: View {
                     ) { statusFilter = nil }
                     ForEach(Self.filterStatuses, id: \.self) { status in
                         statusButton(
-                            title: status.title,
+                            title: status.title(journeyDirection),
                             isSelected: statusFilter == status
                         ) { statusFilter = status }
                     }

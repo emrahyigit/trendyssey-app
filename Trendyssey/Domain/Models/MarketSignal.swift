@@ -44,20 +44,34 @@ enum SignalStatus: String, CaseIterable, Codable, Sendable {
         userSelectableCases.filter { $0 != .expired }
     }
 
-    var title: String {
+    var title: String { title(.bullish) }
+
+    /// Reversal models such as Double Top run the same lifecycle downward, so the
+    /// phase names flip with the journey direction.
+    func title(_ direction: JourneyDirection) -> String {
         switch self {
         case .watching: L10n.text("Being Watched", "İzleniyor")
-        case .preBreakout: L10n.text("Waiting for Breakout", "Kırılım Bekleniyor")
-        case .breakoutDetected: L10n.text("Breakout Started", "Kırılım Başladı")
-        case .confirmed: L10n.text("Breakout Strengthening", "Kırılım Güçleniyor")
+        case .preBreakout: direction == .bullish
+            ? L10n.text("Waiting for Breakout", "Kırılım Bekleniyor")
+            : L10n.text("Waiting for Breakdown", "Düşüş Bekleniyor")
+        case .breakoutDetected: direction == .bullish
+            ? L10n.text("Breakout Started", "Kırılım Başladı")
+            : L10n.text("Breakdown Started", "Düşüş Başladı")
+        case .confirmed: direction == .bullish
+            ? L10n.text("Breakout Strengthening", "Kırılım Güçleniyor")
+            : L10n.text("Breakdown Strengthening", "Düşüş Güçleniyor")
         case .retest: L10n.text("Level Being Tested", "Seviye Test Ediliyor")
         case .failed: L10n.text("Signal Invalidated", "Sinyal Geçersiz Oldu")
         case .expired: L10n.text("Tracking Complete", "Takip Tamamlandı")
         }
     }
 
-    var phaseTitle: String {
-        L10n.text("Breakout Journey", "Kırılım Süreci")
+    var phaseTitle: String { phaseTitle(.bullish) }
+
+    func phaseTitle(_ direction: JourneyDirection) -> String {
+        direction == .bullish
+            ? L10n.text("Breakout Journey", "Kırılım Süreci")
+            : L10n.text("Breakdown Journey", "Düşüş Süreci")
     }
 
     /// User-facing progress only. Backend lifecycle states remain unchanged.
@@ -71,18 +85,24 @@ enum SignalStatus: String, CaseIterable, Codable, Sendable {
         }
     }
 
-    var journeyGuidance: String {
+    var journeyGuidance: String { journeyGuidance(.bullish) }
+
+    func journeyGuidance(_ direction: JourneyDirection) -> String {
         switch self {
         case .watching:
             L10n.text("Market conditions are being monitored.", "Piyasa koşulları takip ediliyor.")
         case .preBreakout:
-            L10n.text("A closed candle above the tracked level is expected.", "İzlenen seviyenin üzerinde mum kapanışı bekleniyor.")
+            direction == .bullish
+                ? L10n.text("A closed candle above the tracked level is expected.", "İzlenen seviyenin üzerinde mum kapanışı bekleniyor.")
+                : L10n.text("A closed candle below the tracked level is expected.", "İzlenen seviyenin altında mum kapanışı bekleniyor.")
         case .breakoutDetected:
             L10n.text("The move is being watched for staying power.", "Hareketin kalıcı olup olmadığı izleniyor.")
         case .confirmed:
             L10n.text("Strength and continuation are being monitored.", "Hareketin gücü ve devamlılığı izleniyor.")
         case .retest:
-            L10n.text("The broken level is being checked for support.", "Kırılan seviyenin korunup korunmadığı izleniyor.")
+            direction == .bullish
+                ? L10n.text("The broken level is being checked for support.", "Kırılan seviyenin destek olarak korunup korunmadığı izleniyor.")
+                : L10n.text("The broken level is being checked for resistance.", "Kırılan seviyenin direnç olarak tutup tutmadığı izleniyor.")
         case .failed:
             L10n.text("Conditions weakened and this journey ended.", "Koşullar bozuldu ve bu süreç sonlandı.")
         case .expired:
@@ -138,6 +158,24 @@ struct SignalEvidence: Codable, Hashable, Sendable {
     let bollingerBandWidthChangePercent: Double?
     let quoteVolume24h: Double?
     let scoreComponents: [SignalScoreComponent]?
+    // Chart-pattern models: the levels and scored ingredients the server
+    // recorded, so the detail page draws and explains without recomputing.
+    let neckline: Double?
+    let firstPivotPrice: Double?
+    let secondPivotPrice: Double?
+    let patternDepth: Double?
+    let pivotDifference: Double?
+    let firstPivotOpenTime: String?
+    let necklineOpenTime: String?
+    let secondPivotOpenTime: String?
+    let confidenceFactors: [EvidenceConfidenceFactor]?
+}
+
+/// One scored ingredient as the server stored it in the signal's evidence.
+struct EvidenceConfidenceFactor: Codable, Hashable, Sendable {
+    let key: String
+    let score: Int
+    let maxScore: Int
 }
 
 struct MarketSignal: Identifiable, Codable, Hashable, Sendable {
@@ -206,7 +244,7 @@ struct MarketSignal: Identifiable, Codable, Hashable, Sendable {
     var baseSymbol: String { symbol.replacingOccurrences(of: "USDT", with: "") }
     var usesAdvancedJourneyModel: Bool { evidence?.model == "gpt-5-6-sol-v1" }
     var qualityTitle: String {
-        L10n.text("Signal strength", "Sinyal gücü")
+        L10n.text("Confidence score", "Güven puanı")
     }
 }
 

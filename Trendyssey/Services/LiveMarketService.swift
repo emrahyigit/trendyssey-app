@@ -27,19 +27,21 @@ struct LiveMarketService: MarketService {
         let breakout_confidence_score: Int
         let false_breakout_risk: Int
         let market_activity_score: Int
-        let volume_ratio: Double
-        let estimated_volume_delta: Double
-        let taker_buy_ratio: Double
+        let volume_ratio: Double?
+        let estimated_volume_delta: Double?
+        let taker_buy_ratio: Double?
         let explanation: String
         let explanation_facts: SignalEvidence?
         let symbols: Symbol
     }
 
+    // The server sweeps the whole enabled universe, so no client-side cap:
+    // every coin with a signal row shows its server phase and score.
     func overview() async throws -> MarketOverview {
-        try await loadSignals(includeWatching: true, universeLimit: 100)
+        try await loadSignals(includeWatching: true, universeLimit: nil)
     }
     func allSymbols() async throws -> [MarketSignal] {
-        let analyzed = try await loadSignals(includeWatching: true, universeLimit: 100).signals
+        let analyzed = try await loadSignals(includeWatching: true, universeLimit: nil).signals
         let bySymbol = Dictionary(uniqueKeysWithValues: analyzed.map { ($0.symbol, $0) })
         return try await activeSymbols().map { symbol in
             bySymbol[symbol.symbol] ?? MarketSignal(id: symbol.id, symbol: symbol.symbol, name: symbol.base_asset, iconURL: symbol.icon_url, price: symbol.current_price ?? 0, change24h: symbol.price_change_percent_24h ?? 0, quoteVolume24h: symbol.quote_volume_24h ?? 0, confidence: 0, falseBreakoutRisk: 100, activityScore: 0, volumeRatio: 0, takerBuyRatio: 0.5, estimatedDelta: 0, status: .watching, signalDate: .distantPast, explanation: L10n.text("Insufficient volume or candle history for a reliable score. You can still add this coin to favorites.", "Güvenilir bir skor için hacim veya mum geçmişi yetersiz. Bu coini yine de favorilere ekleyebilirsin."), hasScore: false)
@@ -61,13 +63,12 @@ struct LiveMarketService: MarketService {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601WithFractionalSeconds
         let rows = try decoder.decode([Row].self, from: data)
-        // Overview and Search use scores from the current top-100 rotating scan
-        // universe. Dashboard averages are narrowed to the top 50 in the view.
+        // Dashboard averages are narrowed to the top 50 in the view.
         let active = try await activeSymbols()
         let selectedUniverse = universeLimit.map { Array(active.prefix($0)) } ?? active
         let universe = Set(selectedUniverse.map(\.symbol))
         let mapped = rows.filter { universe.contains($0.symbols.symbol) }.map { row in
-            MarketSignal(id: row.id, journeyID: row.journey_id, symbol: row.symbols.symbol, name: row.symbols.base_asset, iconURL: row.symbols.icon_url, price: row.symbols.current_price ?? row.signal_price, change24h: row.symbols.price_change_percent_24h ?? 0, quoteVolume24h: row.symbols.quote_volume_24h ?? 0, confidence: row.breakout_confidence_score, falseBreakoutRisk: row.false_breakout_risk, activityScore: row.market_activity_score, volumeRatio: row.volume_ratio, takerBuyRatio: row.taker_buy_ratio, estimatedDelta: row.estimated_volume_delta, status: status(row.status), signalDate: row.signal_time, explanation: row.explanation, evidence: row.explanation_facts)
+            MarketSignal(id: row.id, journeyID: row.journey_id, symbol: row.symbols.symbol, name: row.symbols.base_asset, iconURL: row.symbols.icon_url, price: row.symbols.current_price ?? row.signal_price, change24h: row.symbols.price_change_percent_24h ?? 0, quoteVolume24h: row.symbols.quote_volume_24h ?? 0, confidence: row.breakout_confidence_score, falseBreakoutRisk: row.false_breakout_risk, activityScore: row.market_activity_score, volumeRatio: row.volume_ratio ?? 0, takerBuyRatio: row.taker_buy_ratio ?? 0.5, estimatedDelta: row.estimated_volume_delta ?? 0, status: status(row.status), signalDate: row.signal_time, explanation: row.explanation, evidence: row.explanation_facts)
         }
         var seenSymbols = Set<String>()
         let signals = mapped

@@ -1,10 +1,69 @@
 import Foundation
 
+/// How far back a scenario looks. Longer analysis timeframes produce far fewer
+/// journey events, so a fixed 24-hour window leaves them with almost nothing to
+/// measure; the default therefore scales with the timeframe.
+enum ScenarioLookback: Int, CaseIterable, Identifiable, Sendable {
+    case day1 = 24, day2 = 48, day3 = 72, week1 = 168, week2 = 336
+
+    var id: Int { rawValue }
+
+    nonisolated var hours: Double { Double(rawValue) }
+
+    nonisolated var since: Date { .now.addingTimeInterval(-hours * 3600) }
+
+    var title: String {
+        switch self {
+        case .day1: L10n.text("Last 24 hours", "Son 24 saat")
+        case .day2: L10n.text("Last 2 days", "Son 2 gün")
+        case .day3: L10n.text("Last 3 days", "Son 3 gün")
+        case .week1: L10n.text("Last 7 days", "Son 7 gün")
+        case .week2: L10n.text("Last 14 days", "Son 14 gün")
+        }
+    }
+
+    var shortTitle: String {
+        switch self {
+        case .day1: L10n.text("24H", "24S")
+        case .day2: L10n.text("2D", "2G")
+        case .day3: L10n.text("3D", "3G")
+        case .week1: L10n.text("7D", "7G")
+        case .week2: L10n.text("14D", "14G")
+        }
+    }
+
+    /// Candle interval used to replay what price did after each entry. Must be
+    /// a timeframe the server candle store sweeps, and coarse enough that one
+    /// 100-candle fetch spans the whole window — otherwise the tail of a long
+    /// scenario would be measured against no data.
+    nonisolated var observationInterval: String {
+        switch self {
+        case .day1: "15m"   // 24h  = 96 candles
+        case .day2: "30m"   // 48h  = 96 candles
+        case .day3: "1h"    // 72h  = 72 candles
+        case .week1: "2h"   // 7d   = 84 candles
+        case .week2: "4h"   // 14d  = 84 candles
+        }
+    }
+
+    /// A window that leaves each timeframe enough closed candles to produce a
+    /// meaningful number of journey events.
+    static func `default`(for timeframe: AnalysisTimeframe) -> ScenarioLookback {
+        switch timeframe {
+        case .m15: .day1
+        case .m30: .day2
+        case .h1, .h2: .day3
+        case .h4, .h6: .week1
+        case .d1: .week2
+        }
+    }
+}
+
 struct BreakoutScenarioEntry: Identifiable, Sendable {
     let id: UUID
     let symbol: String
     let status: SignalStatus
-    let signalStrength: Int
+    let confidenceScore: Int
     let falseBreakoutRisk: Int
     let volumeRatio: Double
     let entryPrice: Double
@@ -29,34 +88,25 @@ struct BreakoutScenarioEntry: Identifiable, Sendable {
     }
 }
 
-struct WeeklyModelReport: Sendable {
-    let evaluatedCount: Int
-    let winCount: Int
-    let flatCount: Int
-    let lossCount: Int
-    let averageReturnPercent: Double
-    let bestReturnPercent: Double
-    let worstReturnPercent: Double
+struct BreakoutScenarioResult: Sendable {
+    let entries: [BreakoutScenarioEntry]
+    /// True when the event query filled its row cap, so the oldest part of the
+    /// window is missing and the scenario only covers the most recent events.
+    let isTruncated: Bool
 
-    var winRate: Double {
-        guard evaluatedCount > 0 else { return 0 }
-        return Double(winCount) / Double(evaluatedCount) * 100
-    }
-}
-
-struct AnalysisModelPerformance: Identifiable, Sendable {
-    var id: String { modelSlug }
-    let modelSlug: String
-    let modelName: String
-    let evaluatedCount: Int
-    let winCount: Int
-    let flatCount: Int
-    let lossCount: Int
-    let successRate: Double
-    let averageReturnPercent: Double
+    static let empty = BreakoutScenarioResult(entries: [], isTruncated: false)
 }
 
 actor AnalysisInsightsService {
+    /// Row cap on the journey-event query. The query is ordered by 24h volume,
+    /// so even a truncated window starts with the coins most worth acting on.
+    private static let eventRowLimit = 800
+
+    /// The scenario replays the highest-volume coins that produced a matching
+    /// signal in the window. Each coin costs one observation-candle request, so
+    /// this bound is what keeps the page fast.
+    private static let scenarioSymbolLimit = 20
+
     private struct Model: Decodable, Sendable {
         let slug: String
         let display_name: String
@@ -64,6 +114,7 @@ actor AnalysisInsightsService {
 
     private struct Symbol: Decodable, Sendable {
         let symbol: String
+        let quote_volume_24h: Double?
     }
 
     private struct ScenarioEventRow: Decodable, Sendable {
@@ -78,25 +129,37 @@ actor AnalysisInsightsService {
         let symbols: Symbol
     }
 
-    private struct PerformanceRow: Decodable {
-        let return_percent: Double
-        let outcome_label: String?
-        let analysis_models: Model
-    }
-
-    func scenarioEntries(modelSlug: String, timeframe: String, status: SignalStatus, since: Date) async throws -> [BreakoutScenarioEntry] {
+    func scenarioEntries(
+        modelSlug: String,
+        timeframe: String,
+        status: SignalStatus,
+        lookback: ScenarioLookback
+    ) async throws -> BreakoutScenarioResult {
         var components = URLComponents(url: SupabaseConfig.projectURL.appending(path: "rest/v1/signal_journey_events"), resolvingAgainstBaseURL: false)!
         components.queryItems = [
-            .init(name: "select", value: "id,status,price,candle_close_time,confidence,false_breakout_risk,volume_ratio,analysis_models!inner(slug,display_name),symbols!inner(symbol)"),
+            .init(name: "select", value: "id,status,price,candle_close_time,confidence,false_breakout_risk,volume_ratio,analysis_models!inner(slug,display_name),symbols!inner(symbol,quote_volume_24h)"),
             .init(name: "status", value: "eq.\(Self.databaseStatus(status))"),
             .init(name: "timeframe", value: "eq.\(timeframe)"),
             .init(name: "analysis_models.slug", value: "eq.\(modelSlug)"),
-            .init(name: "candle_close_time", value: "gte.\(Self.iso8601(since))"),
-            .init(name: "order", value: "candle_close_time.desc"),
-            .init(name: "limit", value: "500"),
+            .init(name: "candle_close_time", value: "gte.\(Self.iso8601(lookback.since))"),
+            // Highest-volume coins first, so even a truncated window always
+            // contains the entries most worth acting on.
+            .init(name: "order", value: "symbols(quote_volume_24h).desc,candle_close_time.desc"),
+            .init(name: "limit", value: "\(Self.eventRowLimit)"),
         ]
-        let rows = try await get([ScenarioEventRow].self, url: components.url!)
-            .filter { CryptoAssetUniverse.includes(symbol: $0.symbols.symbol) }
+        let allRows = try await get([ScenarioEventRow].self, url: components.url!)
+        let eligibleRows = allRows.filter { CryptoAssetUniverse.includes(symbol: $0.symbols.symbol) }
+        // Rows arrive ordered by volume, so the first N distinct symbols are the
+        // highest-volume coins that actually produced this signal in the window.
+        // Only those are replayed; everything else would just slow the page down.
+        var selectedSymbols: [String] = []
+        for row in eligibleRows where !selectedSymbols.contains(row.symbols.symbol) {
+            selectedSymbols.append(row.symbols.symbol)
+            if selectedSymbols.count >= Self.scenarioSymbolLimit { break }
+        }
+        let rows = eligibleRows.filter { selectedSymbols.contains($0.symbols.symbol) }
+        let droppedSymbols = Set(eligibleRows.map(\.symbols.symbol)).count - selectedSymbols.count
+        let interval = lookback.observationInterval
         let grouped = Dictionary(grouping: rows, by: { $0.symbols.symbol })
         let entries = await withTaskGroup(of: [BreakoutScenarioEntry].self) { group in
             for (symbol, events) in grouped {
@@ -108,9 +171,9 @@ actor AnalysisInsightsService {
                     guard let earliest = datedEvents.map({ $0.1 }).min() else { return [] }
                     guard let candles = try? await CandleService().candles(
                         for: symbol,
-                        interval: "5m",
+                        interval: interval,
                         startingAt: earliest,
-                        limit: 500
+                        limit: 100
                     ) else { return [] }
                     return datedEvents.map { row, entryDate in
                         let observed = candles.filter { $0.openTime > entryDate }
@@ -118,7 +181,7 @@ actor AnalysisInsightsService {
                             id: row.id,
                             symbol: symbol,
                             status: status,
-                            signalStrength: row.confidence,
+                            confidenceScore: row.confidence,
                             falseBreakoutRisk: row.false_breakout_risk,
                             volumeRatio: row.volume_ratio ?? 0,
                             entryPrice: row.price,
@@ -134,69 +197,20 @@ actor AnalysisInsightsService {
             for await batch in group { values.append(contentsOf: batch) }
             return values
         }
-        return entries.sorted { $0.entryDate > $1.entryDate }
-    }
-
-    func modelPerformance(timeframe: String, horizon: Int) async throws -> [AnalysisModelPerformance] {
-        var components = URLComponents(url: SupabaseConfig.projectURL.appending(path: "rest/v1/signal_outcome_snapshots"), resolvingAgainstBaseURL: false)!
-        components.queryItems = [
-            .init(name: "select", value: "return_percent,outcome_label,analysis_models!inner(slug,display_name)"),
-            .init(name: "status", value: "eq.evaluated"),
-            .init(name: "timeframe", value: "eq.\(timeframe)"),
-            .init(name: "horizon_candles", value: "eq.\(horizon)"),
-            .init(name: "limit", value: "2000"),
-        ]
-        let rows = try await get([PerformanceRow].self, url: components.url!)
-        let groups = Dictionary(grouping: rows, by: { $0.analysis_models.slug })
-        return groups.values.compactMap { values in
-            guard let first = values.first else { return nil }
-            let wins = values.filter { $0.outcome_label == SignalOutcomeSnapshot.Outcome.win.rawValue }.count
-            let flats = values.filter { $0.outcome_label == SignalOutcomeSnapshot.Outcome.flat.rawValue }.count
-            let losses = values.filter { $0.outcome_label == SignalOutcomeSnapshot.Outcome.loss.rawValue }.count
-            let count = values.count
-            let average = values.reduce(0.0) { $0 + $1.return_percent } / Double(max(count, 1))
-            return AnalysisModelPerformance(
-                modelSlug: first.analysis_models.slug,
-                modelName: first.analysis_models.display_name,
-                evaluatedCount: count,
-                winCount: wins,
-                flatCount: flats,
-                lossCount: losses,
-                successRate: Double(wins) / Double(max(count, 1)) * 100,
-                averageReturnPercent: average
-            )
-        }
-        .sorted {
-            if $0.successRate != $1.successRate { return $0.successRate > $1.successRate }
-            return $0.modelName < $1.modelName
-        }
-    }
-
-    func weeklyReport(timeframe: String) async throws -> WeeklyModelReport {
-        var components = URLComponents(url: SupabaseConfig.projectURL.appending(path: "rest/v1/signal_outcome_snapshots"), resolvingAgainstBaseURL: false)!
-        components.queryItems = [
-            .init(name: "select", value: "return_percent,outcome_label"),
-            .init(name: "status", value: "eq.evaluated"),
-            .init(name: "timeframe", value: "eq.\(timeframe)"),
-            .init(name: "created_at", value: "gte.\(Self.iso8601(Date.now.addingTimeInterval(-7 * 86_400)))"),
-            .init(name: "limit", value: "5000"),
-        ]
-        let rows = try await get([PerformanceRow2].self, url: components.url!)
-        let returns = rows.compactMap(\.return_percent)
-        return WeeklyModelReport(
-            evaluatedCount: rows.count,
-            winCount: rows.filter { $0.outcome_label == SignalOutcomeSnapshot.Outcome.win.rawValue }.count,
-            flatCount: rows.filter { $0.outcome_label == SignalOutcomeSnapshot.Outcome.flat.rawValue }.count,
-            lossCount: rows.filter { $0.outcome_label == SignalOutcomeSnapshot.Outcome.loss.rawValue }.count,
-            averageReturnPercent: returns.isEmpty ? 0 : returns.reduce(0, +) / Double(returns.count),
-            bestReturnPercent: returns.max() ?? 0,
-            worstReturnPercent: returns.min() ?? 0
+        let volumeBySymbol = Dictionary(
+            rows.map { ($0.symbols.symbol, $0.symbols.quote_volume_24h ?? 0) },
+            uniquingKeysWith: { first, _ in first }
         )
-    }
-
-    private struct PerformanceRow2: Decodable {
-        let return_percent: Double?
-        let outcome_label: String?
+        return BreakoutScenarioResult(
+            // Highest 24h volume first; recency breaks ties within a coin.
+            entries: entries.sorted {
+                let lhs = volumeBySymbol[$0.symbol] ?? 0
+                let rhs = volumeBySymbol[$1.symbol] ?? 0
+                if lhs != rhs { return lhs > rhs }
+                return $0.entryDate > $1.entryDate
+            },
+            isTruncated: allRows.count >= Self.eventRowLimit || droppedSymbols > 0
+        )
     }
 
     private func get<T: Decodable>(_ type: T.Type, url: URL) async throws -> T {

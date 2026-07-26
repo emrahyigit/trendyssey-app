@@ -5,7 +5,7 @@ struct WatchlistView: View {
     @State private var liveSignals: [MarketSignal] = []
     @State private var selectedSignal: MarketSignal?
     @AppStorage("preferredTimeframe") private var preferredTimeframe = "15m"
-    @AppStorage(AnalysisModelSelection.storageKey) private var preferredAnalysisModel = AnalysisModelSelection.defaultSlug
+    @AppStorage(JourneyModel.storageKey) private var journeyModel = JourneyModel.emaCross.rawValue
 
     private var followedSignals: [MarketSignal] { liveSignals.filter { environment.watchlist.contains($0.symbol) } }
 
@@ -19,6 +19,6 @@ struct WatchlistView: View {
         .trendysseyBackground().navigationTitle(L10n.text("Watchlist", "Takip Listesi"))
         .navigationDestination(item: $selectedSignal) { SignalDetailView(signal: $0) }
         .overlay { if followedSignals.isEmpty { ContentUnavailableView(L10n.text("Your watchlist is empty", "Takip listen boş"), systemImage: "star", description: Text(L10n.text("Add coins from a signal detail page.", "Bir sinyal detayından coin ekleyebilirsin."))) } }
-        .task(id: "\(preferredAnalysisModel)|\(preferredTimeframe)") { liveSignals = (try? await environment.marketService.allSymbols()) ?? [] }
+        .task(id: "\(journeyModel)|\(preferredTimeframe)") { liveSignals = (try? await environment.marketService.allSymbols()) ?? [] }
     }
 }

@@ -6,20 +6,28 @@ struct SignalDetailView: View {
     @Environment(AppEnvironment.self) private var environment
     let signal: MarketSignal
     @State private var candles: [PriceCandle] = []
-    @State private var analysis: EMAJourneyAnalysis?
+    @State private var analysis: JourneyAnalysis?
     @State private var chartError = false
+    @State private var outsideUniverse = false
     @AppStorage("preferredTimeframe") private var preferredTimeframe = "15m"
+    @AppStorage(JourneyModel.storageKey) private var journeyModel = JourneyModel.emaCross.rawValue
 
-    private static let emaFastColor = TrendysseyColor.binanceYellow
-    private static let emaMediumColor = Color(red: 0.91, green: 0.42, blue: 0.66)
-    private static let emaLongColor = Color(red: 0.62, green: 0.49, blue: 0.92)
+    private static let overlayColors: [String: Color] = [
+        "ema7": TrendysseyColor.binanceYellow,
+        "ema25": Color(red: 0.91, green: 0.42, blue: 0.66),
+        "ema99": Color(red: 0.62, green: 0.49, blue: 0.92),
+        "neckline": TrendysseyColor.accent,
+        "patternBase": Color(red: 0.62, green: 0.49, blue: 0.92),
+    ]
 
+    private var selectedModel: JourneyModel { JourneyModel(rawValue: journeyModel) ?? .emaCross }
     private var currentPhase: SignalStatus { analysis?.currentPhase ?? signal.status }
+    private var direction: JourneyDirection { analysis?.direction ?? selectedModel.direction }
 
-    /// Coins outside the backend's high-volume universe get live on-device
-    /// analysis only for Pro members.
+    /// Analysis exists only where the server computed it: coins with a signal
+    /// row. The app never derives one of its own.
     private var liveAnalysisAllowed: Bool {
-        signal.hasScore || environment.subscriptionStore.isSubscribed
+        signal.hasScore
     }
 
     var body: some View {
@@ -30,9 +38,11 @@ struct SignalDetailView: View {
                     VStack(alignment: .leading) {
                         Text(signal.symbol).font(.title2.bold())
                         if liveAnalysisAllowed {
-                            Text(currentPhase.title)
+                            Text(currentPhase.title(direction))
                                 .font(.subheadline)
                                 .foregroundStyle(currentPhase == .watching ? TrendysseyColor.secondaryText : TrendysseyColor.positive)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.65)
                         } else {
                             Text(L10n.text("Low-volume coin", "Düşük hacimli coin"))
                                 .font(.subheadline).foregroundStyle(TrendysseyColor.secondaryText)
@@ -52,41 +62,39 @@ struct SignalDetailView: View {
                 SurfaceCard { CoinChatPreview(symbol: signal.symbol, journeyID: signal.journeyID, journeyPhase: currentPhase) }
             }.padding(18)
         }.background(TrendysseyColor.canvas.ignoresSafeArea()).navigationBarTitleDisplayMode(.inline)
-            .task(id: "\(signal.symbol)-\(preferredTimeframe)") {
+            .task(id: "\(signal.symbol)-\(preferredTimeframe)-\(journeyModel)") {
                 while !Task.isCancelled {
                     await loadCandles()
-                    try? await Task.sleep(for: .seconds(15))
+                    try? await Task.sleep(for: .seconds(5))
                 }
             }
     }
 
     private var proTeaser: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label(L10n.text("Live analysis is a Pro feature", "Canlı analiz bir Pro özelliği"), systemImage: "lock.fill")
+            Label(L10n.text("No server analysis yet", "Henüz sunucu analizi yok"), systemImage: "antenna.radiowaves.left.and.right.slash")
                 .font(.headline)
             Text(L10n.text(
-                "This coin is outside the high-volume scan universe. Trendyssey Pro unlocks instant EMA 7/25/99 journey and confidence analysis for every listed coin.",
-                "Bu coin yüksek hacimli tarama evreninin dışında. Trendyssey Pro, listelenen her coin için anlık EMA 7/25/99 süreç ve güven puanı analizini açar."
+                "The server has not produced a signal for this coin on the selected timeframe yet. Analysis appears as soon as the next scan covers it.",
+                "Sunucu bu coin için seçili zaman diliminde henüz bir sinyal üretmedi. Bir sonraki tarama kapsadığında analiz burada görünecek."
             ))
             .font(.caption).foregroundStyle(TrendysseyColor.secondaryText).lineSpacing(3)
-            NavigationLink { SubscriptionView() } label: {
-                Text(L10n.text("Unlock with Trendyssey Pro", "Trendyssey Pro ile aç"))
-                    .font(.subheadline.bold()).foregroundStyle(.black)
-                    .frame(maxWidth: .infinity).frame(height: 42)
-                    .background(TrendysseyColor.accent, in: Capsule())
-            }
-            .buttonStyle(.plain)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    private var exchange: PreferredExchange { PreferredExchange.selected }
+
     private var binanceLink: some View {
-        Button(action: openInBinance) {
+        Button(action: openInExchange) {
             HStack(spacing: 5) {
-                Image("BinanceMark")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 14, height: 14)
-                Text("BINANCE")
+                if exchange.usesBinanceMark {
+                    Image("BinanceMark")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 14, height: 14)
+                }
+                Text(exchange.title.uppercased())
                     .font(.system(size: 9, weight: .black, design: .rounded))
                     .tracking(0.55)
                     .lineLimit(1)
@@ -99,21 +107,18 @@ struct SignalDetailView: View {
             .background(TrendysseyColor.binanceYellow, in: Capsule())
             .overlay(Capsule().stroke(.white.opacity(0.18), lineWidth: 0.5))
         }
-        .accessibilityLabel(L10n.text("Open \(signal.baseSymbol) on Binance", "\(signal.baseSymbol) paritesini Binance'ta aç"))
+        .accessibilityLabel(L10n.text("Open \(signal.baseSymbol) on \(exchange.title)", "\(signal.baseSymbol) paritesini \(exchange.title) üzerinde aç"))
     }
 
-    private var binanceDeepLinkURL: URL {
-        URL(string: "bnc://app.binance.com/trade/trade?at=spot&symbol=\(signal.symbol.lowercased())")!
-    }
-
-    private var binanceSpotWebURL: URL {
-        URL(string: "https://www.binance.com/en/trade/\(signal.baseSymbol)_USDT?type=spot")!
-    }
-
-    private func openInBinance() {
-        UIApplication.shared.open(binanceDeepLinkURL, options: [:]) { opened in
+    private func openInExchange() {
+        let webURL = exchange.webURL(baseAsset: signal.baseSymbol)
+        guard let appURL = exchange.appURL(symbol: signal.symbol) else {
+            UIApplication.shared.open(webURL)
+            return
+        }
+        UIApplication.shared.open(appURL, options: [:]) { opened in
             guard !opened else { return }
-            UIApplication.shared.open(binanceSpotWebURL)
+            UIApplication.shared.open(webURL)
         }
     }
 
@@ -121,7 +126,7 @@ struct SignalDetailView: View {
 
     // MARK: - Chart
 
-    private struct EMAPoint: Identifiable {
+    private struct OverlayPoint: Identifiable {
         let time: Date
         let value: Double
         let series: String
@@ -129,20 +134,52 @@ struct SignalDetailView: View {
     }
 
     @ViewBuilder private var candleChart: some View {
-        if candles.isEmpty && !chartError {
+        if outsideUniverse {
+            ContentUnavailableView(
+                L10n.text("Outside the scan universe", "Tarama evreni dışında"),
+                systemImage: "antenna.radiowaves.left.and.right.slash",
+                description: Text(L10n.text(
+                    "The server does not track candles for this coin yet, so there is no chart or live analysis. Signals for tracked coins are unaffected.",
+                    "Sunucu bu coin için henüz mum takip etmiyor; bu yüzden grafik ve canlı analiz yok. Takip edilen coinlerin sinyalleri bundan etkilenmez."
+                ))
+            )
+            .frame(height: 220)
+        } else if candles.isEmpty && !chartError {
             ProgressView(L10n.text("Loading \(AnalysisTimeframe.selected.title) candles…", "\(AnalysisTimeframe.selected.title) mumları yükleniyor…")).frame(maxWidth: .infinity).frame(height: 220)
         } else if chartError {
             ContentUnavailableView(L10n.text("Chart unavailable", "Grafik yüklenemedi"), systemImage: "chart.xyaxis.line", description: Text(L10n.text("Close and reopen the page to retry.", "Yeniden denemek için sayfayı kapatıp açabilirsin.")))
                 .frame(height: 220)
         } else {
             VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Text(L10n.text("Price candles", "Fiyat mumları")).font(.headline)
-                    Spacer()
-                    Text(AnalysisTimeframe.selected.rawValue.uppercased())
-                    if candles.last?.isClosed == false { Label(L10n.text("LIVE", "GEÇİCİ"), systemImage: "clock").foregroundStyle(TrendysseyColor.warning) }
-                    else { Text(L10n.text("CLOSED", "KAPANMIŞ")) }
-                }.font(.caption2.bold()).foregroundStyle(TrendysseyColor.secondaryText)
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(L10n.text("Price candles", "Fiyat mumları"))
+                        .font(.headline)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                    Text("(\(AnalysisTimeframe.selected.rawValue.uppercased()))")
+                        .font(.caption.bold())
+                        .foregroundStyle(TrendysseyColor.secondaryText)
+                    HStack(alignment: .center, spacing: 4) {
+                        Circle().fill(TrendysseyColor.negative).frame(width: 6, height: 6)
+                        Text(verbatim: "LIVE").font(.caption2.bold())
+                    }
+                    .foregroundStyle(TrendysseyColor.negative)
+                    .padding(.horizontal, 7).padding(.vertical, 4)
+                    .background(TrendysseyColor.negative.opacity(0.12), in: Capsule())
+                    Spacer(minLength: 6)
+                    VStack(alignment: .trailing, spacing: 1) {
+                        Text("$\(livePrice.formatted(.number.precision(.fractionLength(2...6)).locale(L10n.locale)))")
+                            .font(.caption.bold())
+                            .foregroundStyle(TrendysseyColor.primaryText)
+                            .monospacedDigit()
+                            .lineLimit(1)
+                        Text(L10n.text("Vol. $\(compactChartVolume)", "Hacim $\(compactChartVolume)"))
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(TrendysseyColor.secondaryText)
+                            .monospacedDigit()
+                            .lineLimit(1)
+                    }
+                }
                 Chart {
                     ForEach(visibleCandles) { candle in
                         RuleMark(x: .value(L10n.text("Time", "Zaman"), candle.openTime), yStart: .value(L10n.text("Low", "Düşük"), candle.low), yEnd: .value(L10n.text("High", "Yüksek"), candle.high))
@@ -153,62 +190,109 @@ struct SignalDetailView: View {
                             .foregroundStyle(candle.isRising ? TrendysseyColor.positive : TrendysseyColor.negative)
                             .opacity(candle.isClosed ? 1 : 0.45)
                     }
-                    ForEach(emaOverlayPoints) { point in
+                    ForEach(seriesPoints) { point in
                         LineMark(
                             x: .value(L10n.text("Time", "Zaman"), point.time),
-                            y: .value("EMA", point.value),
-                            series: .value("EMA", point.series)
+                            y: .value(L10n.text("Value", "Değer"), point.value),
+                            series: .value(L10n.text("Series", "Seri"), point.series)
                         )
-                        .foregroundStyle(emaColor(point.series))
+                        .foregroundStyle(Self.overlayColor(point.series))
                         .lineStyle(StrokeStyle(lineWidth: 1.4))
+                    }
+                    ForEach(analysis?.levels ?? []) { level in
+                        RuleMark(y: .value(level.title, level.price))
+                            .foregroundStyle(Self.overlayColor(level.key))
+                            .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                    }
+                    ForEach(visibleMarkers) { marker in
+                        PointMark(
+                            x: .value(L10n.text("Time", "Zaman"), marker.time),
+                            y: .value(marker.title, marker.price)
+                        )
+                        .foregroundStyle(TrendysseyColor.accent)
+                        .symbolSize(70)
                     }
                 }
                 .chartYScale(domain: chartDomain)
                 .chartXAxis(.hidden).chartYAxis { AxisMarks(position: .trailing) }.frame(height: 210)
-                HStack(spacing: 12) {
-                    emaLegend("EMA 7", Self.emaFastColor)
-                    emaLegend("EMA 25", Self.emaMediumColor)
-                    emaLegend("EMA 99", Self.emaLongColor)
+                chartLegend
+            }
+        }
+    }
+
+    @ViewBuilder private var chartLegend: some View {
+        if let analysis {
+            HStack(spacing: 12) {
+                ForEach(analysis.series) { series in
+                    overlayLegend(series.title, Self.overlayColor(series.key), dashed: false)
+                }
+                ForEach(analysis.levels) { level in
+                    overlayLegend(level.title, Self.overlayColor(level.key), dashed: true)
                 }
             }
         }
     }
 
-    private func emaLegend(_ title: String, _ color: Color) -> some View {
+    private func overlayLegend(_ title: String, _ color: Color, dashed: Bool) -> some View {
         HStack(spacing: 4) {
-            Capsule().fill(color).frame(width: 14, height: 3)
+            if dashed {
+                Capsule().fill(color).frame(width: 5, height: 3)
+                Capsule().fill(color).frame(width: 5, height: 3)
+            } else {
+                Capsule().fill(color).frame(width: 14, height: 3)
+            }
             Text(title).font(.caption2.weight(.semibold)).foregroundStyle(TrendysseyColor.secondaryText)
+                .lineLimit(1)
         }
     }
 
-    private var visibleCandles: [PriceCandle] { Array(candles.suffix(48)) }
+    /// The last 48 candles, widened when the model marks pattern pivots further
+    /// back so the shape it found stays on screen.
+    /// The newest close, which is the live price while the last candle is open.
+    private var livePrice: Double { candles.last?.close ?? signal.price }
 
-    private var emaOverlayPoints: [EMAPoint] {
+    private var compactChartVolume: String {
+        signal.quoteVolume24h.formatted(.number.notation(.compactName).precision(.significantDigits(3)).locale(L10n.locale))
+    }
+
+    private var visibleCandles: [PriceCandle] {
+        let minimumWindow = 48
+        guard let earliestMarker = analysis?.markers.map(\.time).min() else {
+            return Array(candles.suffix(minimumWindow))
+        }
+        let sinceMarker = candles.filter { $0.openTime >= earliestMarker }.count
+        return Array(candles.suffix(min(140, max(minimumWindow, sinceMarker + 6))))
+    }
+
+    private var seriesPoints: [OverlayPoint] {
         guard let analysis, let windowStart = visibleCandles.first?.openTime else { return [] }
-        var points: [EMAPoint] = []
-        for (series, values) in [("EMA 7", analysis.emaFast), ("EMA 25", analysis.emaMedium), ("EMA 99", analysis.emaLong)] {
+        var points: [OverlayPoint] = []
+        for series in analysis.series {
             for (index, candle) in analysis.candles.enumerated() where candle.openTime >= windowStart {
-                if let value = values[index] {
-                    points.append(EMAPoint(time: candle.openTime, value: value, series: series))
+                if index < series.values.count, let value = series.values[index] {
+                    points.append(OverlayPoint(time: candle.openTime, value: value, series: series.key))
                 }
             }
         }
         return points
     }
 
-    private func emaColor(_ series: String) -> Color {
-        switch series {
-        case "EMA 7": Self.emaFastColor
-        case "EMA 25": Self.emaMediumColor
-        default: Self.emaLongColor
-        }
+    private var visibleMarkers: [JourneyMarker] {
+        guard let analysis, let windowStart = visibleCandles.first?.openTime else { return [] }
+        return analysis.markers.filter { $0.time >= windowStart }
+    }
+
+    private static func overlayColor(_ key: String) -> Color {
+        overlayColors[key] ?? TrendysseyColor.secondaryText
     }
 
     private var chartDomain: ClosedRange<Double> {
         let visible = visibleCandles
-        let emaValues = emaOverlayPoints.map(\.value)
-        let lows = visible.map(\.low) + emaValues
-        let highs = visible.map(\.high) + emaValues
+        let overlayValues = seriesPoints.map(\.value)
+            + (analysis?.levels.map(\.price) ?? [])
+            + visibleMarkers.map(\.price)
+        let lows = visible.map(\.low) + overlayValues
+        let highs = visible.map(\.high) + overlayValues
         guard let low = lows.min(), let high = highs.max() else { return 0...1 }
         let padding = max((high - low) * 0.10, abs(high) * 0.001)
         return (low - padding)...(high + padding)
@@ -216,15 +300,22 @@ struct SignalDetailView: View {
 
     @MainActor private func loadCandles() async {
         do {
-            let higher = AnalysisTimeframe.selected.higher
-            async let higherCandles = CandleService().candles(for: signal.symbol, interval: higher.interval, limit: 200)
-            let fetched = try await CandleService().candles(for: signal.symbol, limit: 500)
+            // The chart is the one deliberate Binance surface: live candles,
+            // including the forming one. Everything analytical — phase, score,
+            // factors, overlays, journey — is still read from the server,
+            // which is the only place it is computed.
+            let fetched = try await CandleService().liveChartCandles(
+                for: signal.symbol,
+                interval: AnalysisTimeframe.selected.rawValue,
+                limit: 100
+            )
+            outsideUniverse = false
             candles = fetched
-            if liveAnalysisAllowed {
-                analysis = EMAJourneyAnalyzer.analyze(
-                    candles: fetched,
-                    higherTimeframeCandles: try? await higherCandles,
-                    higherTimeframeTitle: higher.title
+            if liveAnalysisAllowed, !fetched.isEmpty {
+                analysis = await ServerAnalysisService.shared.analysis(
+                    for: signal,
+                    model: selectedModel,
+                    candles: fetched
                 )
             }
             chartError = false
@@ -236,20 +327,20 @@ struct SignalDetailView: View {
     @ViewBuilder private var journeyCard: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
-                Label(L10n.text("Breakout Journey", "Kırılım Süreci"), systemImage: "point.topleft.down.to.point.bottomright.curvepath")
+                Label(currentPhase.phaseTitle(direction), systemImage: "point.topleft.down.to.point.bottomright.curvepath")
                     .font(.headline)
                 Spacer()
                 Text(L10n.text("LAST 24H", "SON 24 SAAT"))
                     .font(.caption2.bold()).foregroundStyle(TrendysseyColor.secondaryText)
             }
             if let analysis {
-                SignalJourneyProgress(status: analysis.currentPhase, compact: true)
+                SignalJourneyProgress(status: analysis.currentPhase, direction: analysis.direction, compact: true)
                 let events = analysis.events(lastHours: 24)
                 if events.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(L10n.text("No phase transition in the last 24 hours.", "Son 24 saatte aşama geçişi olmadı."))
                             .font(.caption.weight(.semibold))
-                        Text(analysis.currentPhase.journeyGuidance)
+                        Text(analysis.currentPhase.journeyGuidance(analysis.direction))
                             .font(.caption).foregroundStyle(TrendysseyColor.secondaryText).lineSpacing(3)
                     }
                 } else {
@@ -262,18 +353,21 @@ struct SignalDetailView: View {
                                 }
                             }.padding(.top, 4)
                             VStack(alignment: .leading, spacing: 4) {
-                                Text(event.status.title).font(.subheadline.bold()).foregroundStyle(journeyColor(event.status))
+                                Text(event.status.title(analysis.direction)).font(.subheadline.bold()).foregroundStyle(journeyColor(event.status))
                                 Text(L10n.dateTime(event.time))
                                     .font(.caption2).foregroundStyle(TrendysseyColor.secondaryText)
                             }
                             Spacer()
-                            Text("$\(event.price.formatted(.number.precision(.fractionLength(2...6))))")
+                            Text("$\(event.price.formatted(.number.precision(.fractionLength(2...6)).locale(L10n.locale)))")
                                 .font(.caption.bold()).monospacedDigit()
                         }
                     }
                 }
-                Text(L10n.text("Phases are derived from EMA 7/25 crossovers on closed \(AnalysisTimeframe.selected.title) candles; EMA 99 acts as the trend filter.", "Aşamalar, kapanmış \(AnalysisTimeframe.selected.title) mumlarındaki EMA 7/25 kesişimlerinden türetilir; EMA 99 trend filtresi olarak kullanılır."))
-                    .font(.caption2).foregroundStyle(TrendysseyColor.secondaryText)
+                Text(L10n.text(
+                    "\(analysis.model.title) on closed \(AnalysisTimeframe.selected.title) candles. \(analysis.model.summary)",
+                    "Kapanmış \(AnalysisTimeframe.selected.title) mumlarında \(analysis.model.title). \(analysis.model.summary)"
+                ))
+                .font(.caption2).foregroundStyle(TrendysseyColor.secondaryText).lineSpacing(2)
             } else if chartError {
                 Label(L10n.text("Journey analysis is temporarily unavailable.", "Süreç analizi geçici olarak kullanılamıyor."), systemImage: "exclamationmark.triangle")
                     .font(.caption).foregroundStyle(TrendysseyColor.warning)
@@ -330,6 +424,7 @@ struct SignalDetailView: View {
                 ProgressView().frame(maxWidth: .infinity).padding(.vertical, 16)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func factorRow(_ factor: ConfidenceFactor) -> some View {

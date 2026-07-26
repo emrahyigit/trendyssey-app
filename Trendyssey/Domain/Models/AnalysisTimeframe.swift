@@ -16,6 +16,20 @@ enum AnalysisTimeframe: String, CaseIterable, Identifiable, Sendable {
     }
     static var selected: AnalysisTimeframe { AnalysisTimeframe(rawValue: UserDefaults.standard.string(forKey: "preferredTimeframe") ?? "15m") ?? .m15 }
 
+    /// Candle length in minutes, used to work out how far back a fixed number of
+    /// candles actually reaches.
+    nonisolated var minutes: Int {
+        switch self {
+        case .m15: 15
+        case .m30: 30
+        case .h1: 60
+        case .h2: 120
+        case .h4: 240
+        case .h6: 360
+        case .d1: 1_440
+        }
+    }
+
     /// The next timeframe up, used for the confluence ingredient of the confidence score.
     var higher: (interval: String, title: String) {
         switch self {

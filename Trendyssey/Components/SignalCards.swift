@@ -3,10 +3,13 @@ import UIKit
 
 struct FeaturedSignalCard: View {
     let signal: MarketSignal
-    @State private var analysis: EMAJourneyAnalysis?
+    @AppStorage(JourneyModel.storageKey) private var journeyModel = JourneyModel.emaCross.rawValue
 
-    private var currentPhase: SignalStatus { analysis?.currentPhase ?? signal.status }
-    private var confidence: Int { analysis?.confidence ?? signal.confidence }
+    // Phase and score come straight from the server's signal row — the same
+    // values that drove the push notification and the lists.
+    private var currentPhase: SignalStatus { signal.status }
+    private var direction: JourneyDirection { (JourneyModel(rawValue: journeyModel) ?? .emaCross).direction }
+    private var confidence: Int { signal.confidence }
 
     var body: some View {
         SurfaceCard {
@@ -15,11 +18,11 @@ struct FeaturedSignalCard: View {
                     SymbolMark(symbol: signal.baseSymbol, iconURL: signal.iconURL)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(signal.baseSymbol).font(.title2.bold())
-                        Text(currentPhase.title).font(.caption).foregroundStyle(currentPhase == .watching ? TrendysseyColor.secondaryText : TrendysseyColor.positive)
+                        Text(currentPhase.title(direction)).font(.caption).foregroundStyle(currentPhase == .watching ? TrendysseyColor.secondaryText : TrendysseyColor.positive)
                     }
                     Spacer()
                     VStack(alignment: .trailing, spacing: 2) {
-                        Text("$\(signal.price.formatted(.number.precision(.fractionLength(2...6))))")
+                        Text("$\(signal.price.formatted(.number.precision(.fractionLength(2...6)).locale(L10n.locale)))")
                             .font(.headline)
                             .monospacedDigit()
                         Text(signal.change24h / 100, format: .percent.precision(.fractionLength(2)))
@@ -27,7 +30,7 @@ struct FeaturedSignalCard: View {
                             .foregroundStyle(signal.change24h >= 0 ? TrendysseyColor.positive : TrendysseyColor.negative)
                     }
                 }
-                SignalJourneyProgress(status: currentPhase, compact: true)
+                SignalJourneyProgress(status: currentPhase, direction: direction, compact: true)
                 HStack(alignment: .bottom) {
                     VStack(alignment: .leading, spacing: 3) { Text(signal.qualityTitle.uppercased()).font(.caption2.bold()).foregroundStyle(TrendysseyColor.secondaryText); Text("\(confidence)").font(.system(size: 52, weight: .bold, design: .rounded)).monospacedDigit() + Text(" / 100").font(.subheadline).foregroundColor(TrendysseyColor.secondaryText) }
                     Spacer()
@@ -35,7 +38,7 @@ struct FeaturedSignalCard: View {
                         Text(L10n.text("24H VOLUME", "24S HACİM"))
                             .font(.caption2.bold())
                             .foregroundStyle(TrendysseyColor.secondaryText)
-                        Text("$\(signal.quoteVolume24h.formatted(.number.notation(.compactName).precision(.significantDigits(3))))")
+                        Text("$\(signal.quoteVolume24h.formatted(.number.notation(.compactName).precision(.significantDigits(3)).locale(L10n.locale)))")
                             .font(.title2.bold())
                             .monospacedDigit()
                             .foregroundStyle(TrendysseyColor.accent)
@@ -43,66 +46,47 @@ struct FeaturedSignalCard: View {
                 }
             }
         }
-        .task(id: "\(signal.symbol)|\(AnalysisTimeframe.selected.rawValue)") {
-            analysis = EMAAnalysisCache.shared.cached(for: signal.symbol)
-            if analysis == nil { analysis = await EMAAnalysisCache.shared.analysis(for: signal.symbol) }
-        }
     }
 }
 
 struct SignalRow: View {
-    @Environment(AppEnvironment.self) private var environment
     let signal: MarketSignal
-    @State private var analysis: EMAJourneyAnalysis?
+    @AppStorage(JourneyModel.storageKey) private var journeyModel = JourneyModel.emaCross.rawValue
 
-    /// Coins outside the backend's high-volume universe get live on-device
-    /// analysis only for Pro members.
-    private var liveAnalysisAllowed: Bool {
-        signal.hasScore || environment.subscriptionStore.isSubscribed
-    }
+    private var direction: JourneyDirection { (JourneyModel(rawValue: journeyModel) ?? .emaCross).direction }
 
     var body: some View {
         HStack(spacing: 13) {
             SymbolMark(symbol: signal.baseSymbol, iconURL: signal.iconURL)
             VStack(alignment: .leading, spacing: 4) {
                 Text(signal.baseSymbol).font(.headline)
-                if !liveAnalysisAllowed {
-                    Label(L10n.text("Live analysis with Pro", "Canlı analiz Pro'da"), systemImage: "lock.fill")
-                        .font(.caption.weight(.semibold)).foregroundStyle(TrendysseyColor.secondaryText)
-                        .lineLimit(1).minimumScaleFactor(0.8)
-                } else if let analysis {
-                    Text("\(analysis.currentPhase.title) (\(analysis.confidence))")
+                if signal.hasScore {
+                    Text("\(signal.status.title(direction)) (\(signal.confidence))")
                         .font(.caption.weight(.semibold)).foregroundStyle(strengthColor)
                         .lineLimit(1).minimumScaleFactor(0.8)
                 } else {
-                    Text(verbatim: "Watching (00)")
+                    Label(L10n.text("Outside the scan universe", "Tarama evreni dışında"), systemImage: "antenna.radiowaves.left.and.right.slash")
                         .font(.caption.weight(.semibold)).foregroundStyle(TrendysseyColor.secondaryText)
-                        .redacted(reason: .placeholder)
+                        .lineLimit(1).minimumScaleFactor(0.8)
                 }
             }
             Spacer()
             VStack(alignment: .trailing, spacing: 4) {
-                Text("$\(signal.price.formatted(.number.precision(.fractionLength(2...6))))")
+                Text("$\(signal.price.formatted(.number.precision(.fractionLength(2...6)).locale(L10n.locale)))")
                     .font(.subheadline.bold()).monospacedDigit()
                 Text(L10n.text("Vol. $\(compactDailyVolume)", "Hacim $\(compactDailyVolume)"))
                     .font(.caption2.weight(.medium)).foregroundStyle(TrendysseyColor.secondaryText).monospacedDigit()
             }
         }.padding(15).background(TrendysseyColor.surface, in: RoundedRectangle(cornerRadius: 18))
-            .task(id: "\(signal.symbol)|\(AnalysisTimeframe.selected.rawValue)|\(liveAnalysisAllowed)") {
-                guard liveAnalysisAllowed else { return }
-                analysis = EMAAnalysisCache.shared.cached(for: signal.symbol)
-                if analysis == nil { analysis = await EMAAnalysisCache.shared.analysis(for: signal.symbol) }
-            }
     }
 
     private var compactDailyVolume: String {
-        signal.quoteVolume24h.formatted(.number.notation(.compactName).precision(.significantDigits(3)))
+        signal.quoteVolume24h.formatted(.number.notation(.compactName).precision(.significantDigits(3)).locale(L10n.locale))
     }
 
     private var strengthColor: Color {
-        guard let analysis else { return TrendysseyColor.secondaryText }
-        guard analysis.currentPhase != .watching else { return TrendysseyColor.secondaryText }
-        return switch analysis.confidence {
+        guard signal.status != .watching else { return TrendysseyColor.secondaryText }
+        return switch signal.confidence {
         case 75...: TrendysseyColor.positive
         case 55...: TrendysseyColor.warning
         default: TrendysseyColor.negative
@@ -112,6 +96,7 @@ struct SignalRow: View {
 
 struct SignalJourneyProgress: View {
     let status: SignalStatus
+    var direction: JourneyDirection = .bullish
     var compact = false
 
     private let stepCount = 5
@@ -119,7 +104,7 @@ struct SignalJourneyProgress: View {
     var body: some View {
         VStack(alignment: .leading, spacing: compact ? 7 : 10) {
             HStack(spacing: 8) {
-                Label(status.phaseTitle, systemImage: "point.topleft.down.to.point.bottomright.curvepath")
+                Label(status.phaseTitle(direction), systemImage: "point.topleft.down.to.point.bottomright.curvepath")
                     .font(compact ? .caption.weight(.semibold) : .subheadline.weight(.semibold))
                     .foregroundStyle(TrendysseyColor.primaryText)
                 Spacer(minLength: 8)
@@ -139,8 +124,8 @@ struct SignalJourneyProgress: View {
             .frame(height: 6)
             if !compact {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(status.title).font(.headline).foregroundStyle(progressColor)
-                    Text(status.journeyGuidance)
+                    Text(status.title(direction)).font(.headline).foregroundStyle(progressColor)
+                    Text(status.journeyGuidance(direction))
                         .font(.caption).foregroundStyle(TrendysseyColor.secondaryText).lineSpacing(3)
                 }
             }

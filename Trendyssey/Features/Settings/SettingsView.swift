@@ -9,11 +9,13 @@ struct SettingsView: View {
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("notificationsEnabled") private var notifications = false
     @AppStorage("preferredTimeframe") private var preferredTimeframe = "15m"
-    @AppStorage(AnalysisModelSelection.storageKey) private var preferredAnalysisModel = AnalysisModelSelection.defaultSlug
+    @AppStorage(JourneyModel.storageKey) private var journeyModel = JourneyModel.emaCross.rawValue
     @AppStorage("notificationStatuses") private var notificationStatuses = "preBreakout,breakoutDetected,confirmed,retest,failed,expired"
     @AppStorage("notificationScope") private var notificationScope = "favorites"
+    @AppStorage("notificationMinimumScore") private var notificationMinimumScore = 0
     @AppStorage("appLanguage") private var appLanguage = AppLanguage.default.rawValue
     @AppStorage("themeMode") private var themeMode = AppThemeMode.system.rawValue
+    @AppStorage(PreferredExchange.storageKey) private var preferredExchange = PreferredExchange.binance.rawValue
     @State private var permissionMessage: String?
     @State private var notificationAuthorized = false
     @State private var account: UserSyncService.AccountSnapshot = .anonymous
@@ -24,7 +26,6 @@ struct SettingsView: View {
     @State private var isConfirmingSignOut = false
     @State private var isConfirmingDeletion = false
     @State private var isProcessingAccountAction = false
-    @State private var analysisModels: [AnalysisModelOption] = [.fallback]
 
     var body: some View {
         List {
@@ -88,48 +89,24 @@ struct SettingsView: View {
                 }
             }
             Section(L10n.text("ANALYSIS MODEL", "ANALİZ MODELİ")) {
-                if !environment.subscriptionStore.isSubscribed {
-                    NavigationLink { SubscriptionView() } label: {
-                        Label(L10n.text("Unlock model selection", "Model seçimini aç"), systemImage: "lock.fill")
-                            .foregroundStyle(TrendysseyColor.accent)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
-                }
-                Picker(L10n.text("Model", "Model"), selection: $preferredAnalysisModel) {
-                    ForEach(analysisModels) { model in
-                        Text(model.displayName).tag(model.slug)
+                Picker(L10n.text("Model", "Model"), selection: $journeyModel) {
+                    ForEach(JourneyModel.allCases) { model in
+                        Text(model.title).tag(model.rawValue)
                     }
                 }
-                .disabled(!environment.subscriptionStore.isSubscribed)
                 Picker(L10n.text("Timeframe", "Zaman dilimi"), selection: $preferredTimeframe) {
                     ForEach(AnalysisTimeframe.allCases) { timeframe in
                         Text(timeframe.title).tag(timeframe.rawValue)
                     }
                 }
-                NavigationLink {
-                    if environment.subscriptionStore.isSubscribed { DailyRecapView() }
-                    else { SubscriptionView() }
-                } label: {
-                    proAnalysisLabel(L10n.text("What happened today", "Bugün ne oldu"))
-                }
-                NavigationLink {
-                    if environment.subscriptionStore.isSubscribed { WeeklyReportCardView() }
-                    else { SubscriptionView() }
-                } label: {
-                    proAnalysisLabel(L10n.text("Weekly report card", "Haftalık model karnesi"))
-                }
+                Text(selectedJourneyModel.summary)
+                    .font(.caption)
+                    .foregroundStyle(TrendysseyColor.secondaryText)
                 NavigationLink {
                     if environment.subscriptionStore.isSubscribed { DailyBreakoutSimulatorView() }
                     else { SubscriptionView() }
                 } label: {
-                    proAnalysisLabel(L10n.text("Daily breakout scenario", "Günlük kırılım senaryosu"))
-                }
-                NavigationLink {
-                    if environment.subscriptionStore.isSubscribed { ModelPerformanceComparisonView() }
-                    else { SubscriptionView() }
-                } label: {
-                    proAnalysisLabel(L10n.text("Model performance", "Model performansı"))
+                    proAnalysisLabel(L10n.text("Breakout scenario", "Kırılım senaryosu"))
                 }
             }
             Section(L10n.text("NOTIFICATIONS & FILTERS", "BİLDİRİM VE FİLTRELER")) {
@@ -153,9 +130,19 @@ struct SettingsView: View {
                 }
                 .pickerStyle(.segmented)
                 .disabled(!environment.subscriptionStore.isSubscribed)
+                Stepper(
+                    L10n.text(
+                        "Minimum confidence: \(notificationMinimumScore)",
+                        "Minimum güven puanı: \(notificationMinimumScore)"
+                    ),
+                    value: $notificationMinimumScore,
+                    in: 0...90,
+                    step: 10
+                )
+                .disabled(!environment.subscriptionStore.isSubscribed)
                 DisclosureGroup {
                     ForEach(notificationEligibleStatuses, id: \.self) { status in
-                        Toggle(status.title, isOn: statusBinding(for: status))
+                        Toggle(status.title(alertModel.direction), isOn: statusBinding(for: status))
                     }
                 } label: {
                     LabeledContent(L10n.text("Signal stages", "Sinyal aşamaları"), value: L10n.text("\(selectedStatuses.count) selected", "\(selectedStatuses.count) seçili"))
@@ -175,12 +162,21 @@ struct SettingsView: View {
                 Picker(L10n.text("Appearance", "Görünüm"), selection: $themeMode) {
                     ForEach(AppThemeMode.allCases) { theme in Text(theme.title).tag(theme.rawValue) }
                 }
+                Picker(L10n.text("Exchange", "Borsa"), selection: $preferredExchange) {
+                    ForEach(PreferredExchange.allCases) { exchange in Text(exchange.title).tag(exchange.rawValue) }
+                }
+                Text(L10n.text(
+                    "The trade button on a coin page opens this exchange. Analysis data always comes from Trendyssey's own servers.",
+                    "Coin sayfasındaki işlem düğmesi bu borsayı açar. Analiz verileri her zaman Trendyssey'in kendi sunucularından gelir."
+                ))
+                .font(.caption)
+                .foregroundStyle(TrendysseyColor.secondaryText)
                 LabeledContent(L10n.text("Market", "Market"), value: "Binance Spot")
             }
             Section(L10n.text("ABOUT", "HAKKINDA")) {
-                NavigationLink(L10n.text("Analysis methodology", "Analiz metodolojisi")) { LegalInfoView(title: L10n.text("Analysis methodology", "Analiz metodolojisi"), text: LegalCopy.methodology) }
-                NavigationLink(L10n.text("Privacy", "Gizlilik")) { LegalInfoView(title: L10n.text("Privacy", "Gizlilik"), text: LegalCopy.privacy) }
-                NavigationLink(L10n.text("Risk disclosure", "Risk bildirimi")) { LegalInfoView(title: L10n.text("Risk disclosure", "Risk bildirimi"), text: LegalCopy.risk) }
+                NavigationLink(L10n.text("Analysis methodology", "Analiz metodolojisi")) { LegalInfoView(title: L10n.text("Analysis methodology", "Analiz metodolojisi"), document: LegalCopy.methodology) }
+                NavigationLink(L10n.text("Privacy", "Gizlilik")) { LegalInfoView(title: L10n.text("Privacy", "Gizlilik"), document: LegalCopy.privacy) }
+                NavigationLink(L10n.text("Risk disclosure", "Risk bildirimi")) { LegalInfoView(title: L10n.text("Risk disclosure", "Risk bildirimi"), document: LegalCopy.risk) }
             }
             if !account.isAnonymous {
                 Section(L10n.text("ACCOUNT MANAGEMENT", "HESAP YÖNETİMİ")) {
@@ -232,7 +228,6 @@ struct SettingsView: View {
             }
             .task {
                 account = await UserSyncService.shared.accountSnapshot()
-                await loadAnalysisModels()
                 await refreshNotificationStatus()
                 if !environment.subscriptionStore.isSubscribed, notifications {
                     notifications = false
@@ -240,12 +235,21 @@ struct SettingsView: View {
                 }
             }
             .onChange(of: preferenceFingerprint) { _, _ in syncPreferences() }
-            .onChange(of: environment.subscriptionStore.isSubscribed) { _, isPro in
-                guard !isPro,
-                      analysisModels.first(where: { $0.slug == preferredAnalysisModel })?.isDefault == false,
-                      let defaultModel = analysisModels.first(where: \.isDefault) else { return }
-                preferredAnalysisModel = defaultModel.slug
-            }
+    }
+
+    /// The single model choice in the app: it drives on-device journeys and
+    /// scores, and — through `serverSlug` — which backend model the alerts and the
+    /// recorded signal history come from.
+    private var selectedJourneyModel: JourneyModel {
+        JourneyModel(rawValue: journeyModel) ?? .emaCross
+    }
+
+    /// The model alerts actually come from. Alerts are raised by the backend, so a
+    /// device-only model falls back to the one the backend does run.
+    private var alertModel: JourneyModel {
+        selectedJourneyModel.deliversAlerts
+            ? selectedJourneyModel
+            : JourneyModel.allCases.first(where: \.deliversAlerts) ?? .emaCross
     }
 
     private func proAnalysisLabel(_ title: String) -> some View {
@@ -331,16 +335,7 @@ struct SettingsView: View {
     }
 
     private var preferenceFingerprint: String {
-        "\(notifications)|\(preferredTimeframe)|\(preferredAnalysisModel)|\(notificationStatuses)|\(notificationScope)|\(appLanguage)"
-    }
-
-    private func loadAnalysisModels() async {
-        let loaded = (try? await AnalysisModelService().activeModels()) ?? []
-        analysisModels = loaded.isEmpty ? [.fallback] : loaded
-        if !analysisModels.contains(where: { $0.slug == preferredAnalysisModel }) {
-            preferredAnalysisModel = analysisModels.first(where: \.isDefault)?.slug
-                ?? analysisModels[0].slug
-        }
+        "\(notifications)|\(preferredTimeframe)|\(journeyModel)|\(notificationStatuses)|\(notificationScope)|\(notificationMinimumScore)|\(appLanguage)"
     }
 
     private func syncPreferences() {
@@ -404,8 +399,65 @@ struct SettingsView: View {
 
 private struct LegalInfoView: View {
     let title: String
-    let text: String
-    var body: some View { ScrollView { Text(text).font(.body).lineSpacing(5).padding().frame(maxWidth: .infinity, alignment: .leading) }.background(TrendysseyColor.canvas).navigationTitle(title).navigationBarTitleDisplayMode(.inline) }
+    let document: LegalDocument
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Text(document.summary)
+                    .font(.headline)
+                    .foregroundStyle(TrendysseyColor.primaryText)
+                    .lineSpacing(4)
+                    .padding(.bottom, 2)
+                ForEach(document.sections) { section in
+                    SurfaceCard {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text(section.heading.uppercased())
+                                .font(.caption2.bold())
+                                .tracking(0.8)
+                                .foregroundStyle(TrendysseyColor.accent)
+                            ForEach(Array(section.paragraphs.enumerated()), id: \.offset) { _, paragraph in
+                                Text(paragraph)
+                                    .font(.subheadline)
+                                    .foregroundStyle(TrendysseyColor.secondaryText)
+                                    .lineSpacing(4)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            if !section.bullets.isEmpty {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    ForEach(Array(section.bullets.enumerated()), id: \.offset) { _, bullet in
+                                        HStack(alignment: .top, spacing: 8) {
+                                            Circle()
+                                                .fill(TrendysseyColor.accent)
+                                                .frame(width: 5, height: 5)
+                                                .padding(.top, 7)
+                                            Text(bullet)
+                                                .font(.subheadline)
+                                                .foregroundStyle(TrendysseyColor.secondaryText)
+                                                .lineSpacing(4)
+                                                .fixedSize(horizontal: false, vertical: true)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                if let footnote = document.footnote {
+                    Label(footnote, systemImage: "info.circle")
+                        .font(.caption)
+                        .foregroundStyle(TrendysseyColor.secondaryText)
+                        .lineSpacing(3)
+                        .padding(.top, 2)
+                }
+            }
+            .padding(18)
+        }
+        .background(TrendysseyColor.canvas.ignoresSafeArea())
+        .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.inline)
+    }
 }
 
 private struct ProfileEditorView: View {
@@ -468,157 +520,4 @@ private struct ProfileEditorView: View {
         }
         isSaving = false
     }
-}
-
-private enum LegalCopy {
-    static var methodology: String { L10n.text(
-        """
-        OVERVIEW
-
-        Trendyssey analyzes publicly available Binance Spot market data. Price charts load directly from Binance on your device, while server-side scans maintain durable signal records, journey history, outcome measurements and notifications. The same analysis model runs on both sides, so what you see in the app always matches what the scans record.
-
-        THE EMA CROSS 7/25/99 MODEL
-
-        The model is built on Binance's default exponential moving averages. A crossover of EMA 7 above EMA 25 opens a Breakout Journey; the journey advances through defined phases — waiting for breakout, breakout started, level being tested and breakout strengthening — and ends when the trend structure breaks down. EMA 99 serves as the long-term trend filter.
-
-        CLOSED-CANDLE PRINCIPLE
-
-        All evaluations use closed candles only for the selected timeframe. An open candle may appear on the chart, but it is never treated as confirmed evidence. This materially reduces repainting; it does not eliminate false signals.
-
-        THE CONFIDENCE SCORE
-
-        Each coin receives a single 0–100 confidence score composed of seven weighted ingredients: trend alignment (20), crossover freshness (15), retest confirmation (15), volume support (20), long-term trend (10), momentum (10) and higher-timeframe confluence (10) — agreement with the next timeframe up. Every ingredient is displayed with its own points and rationale, so the score is fully auditable. It is a deterministic summary of current market structure — not a probability, forecast or guarantee.
-
-        OUTCOME MEASUREMENT
-
-        After a breakout is detected, Trendyssey records the subsequent return, maximum favorable excursion (MFE) and maximum adverse excursion (MAE) over defined candle horizons. These records audit what actually happened and power the performance and report-card screens; they do not predict future results.
-
-        LIMITATIONS
-
-        Exchange latency, missing candles, thin liquidity, sudden news, slippage and methodology updates can all affect results. Trendyssey is a research tool and should be one input among several — never the sole basis for a trading decision.
-        """,
-        """
-        GENEL BAKIŞ
-
-        Trendyssey, Binance Spot üzerindeki herkese açık piyasa verilerini analiz eder. Fiyat grafikleri doğrudan cihazınıza Binance'tan yüklenir; sunucu tarafındaki taramalar ise kalıcı sinyal kayıtlarını, süreç geçmişini, sonuç ölçümlerini ve bildirimleri yönetir. Her iki tarafta da aynı analiz modeli çalışır; uygulamada gördüğünüz sonuçlar tarama kayıtlarıyla her zaman tutarlıdır.
-
-        EMA CROSS 7/25/99 MODELİ
-
-        Model, Binance'in varsayılan üssel hareketli ortalamaları üzerine kuruludur. EMA 7'nin EMA 25'i yukarı kesmesi bir Kırılım Süreci başlatır; süreç tanımlı aşamalardan geçer — kırılım bekleniyor, kırılım başladı, seviye test ediliyor, kırılım güçleniyor — ve trend yapısı bozulduğunda sona erer. EMA 99 uzun vadeli trend filtresi olarak görev yapar.
-
-        KAPANMIŞ MUM İLKESİ
-
-        Tüm değerlendirmeler, seçilen zaman diliminde yalnızca kapanmış mumlarla yapılır. Açık mum grafikte görünebilir ancak hiçbir zaman doğrulanmış kanıt sayılmaz. Bu ilke yeniden çizimi önemli ölçüde azaltır; yanlış sinyalleri tamamen ortadan kaldırmaz.
-
-        GÜVEN PUANI
-
-        Her coin, yedi ağırlıklı bileşenden oluşan 0–100 arası tek bir güven puanı alır: trend dizilimi (20), kesişim tazeliği (15), retest onayı (15), hacim desteği (20), uzun vadeli trend (10), momentum (10) ve üst dilim uyumu (10) — bir üst zaman dilimiyle yön birliği. Her bileşen kendi puanı ve gerekçesiyle birlikte gösterilir; böylece puan tamamen denetlenebilirdir. Güven puanı mevcut piyasa yapısının deterministik bir özetidir — olasılık, tahmin veya garanti değildir.
-
-        SONUÇ ÖLÇÜMÜ
-
-        Kırılım algılandıktan sonra Trendyssey; tanımlı mum ufuklarında gerçekleşen getiriyi, maksimum olumlu hareketi (MFE) ve maksimum olumsuz hareketi (MAE) kaydeder. Bu kayıtlar gerçekte ne olduğunu denetler, performans ve karne ekranlarını besler; gelecekteki sonuçları öngörmez.
-
-        SINIRLAR
-
-        Borsa gecikmesi, eksik mumlar, düşük likidite, ani haberler, fiyat kayması ve metodoloji güncellemeleri sonuçları etkileyebilir. Trendyssey bir araştırma aracıdır; birden fazla girdiden yalnızca biri olmalı, hiçbir zaman tek işlem dayanağı olmamalıdır.
-        """
-    ) }
-
-    static var privacy: String { L10n.text(
-        """
-        DATA WE PROCESS
-
-        Trendyssey analyzes publicly available Binance market data. The app never requests your exchange credentials or API keys and never takes custody of your assets. Please do not share exchange secrets in chat or profile fields.
-
-        ACCOUNT AND SYNCHRONIZATION
-
-        On first launch the app creates an anonymous account so your favorites and preferences can be synchronized. If you choose Sign in with Apple, Apple provides your name and email address according to your sharing preference. Trendyssey stores your display name, avatar, favorites, analysis preferences and alert settings solely to provide these features across your devices.
-
-        NOTIFICATIONS AND SUBSCRIPTIONS
-
-        To deliver alerts, Trendyssey stores an APNs device token together with delivery status. Subscription entitlements are verified through Apple transaction identifiers and expiry dates. Payment details are processed exclusively by Apple; Trendyssey never sees or stores them.
-
-        COMMUNITY CONTENT
-
-        Chat messages and breakout predictions are visible to signed-in users together with your display name, avatar and posting time. Prediction accuracy statistics derived from your resolved predictions are shown publicly as a badge. Do not post personal, financial or confidential information. Content may be retained for continuity, abuse prevention and moderation.
-
-        SECURITY
-
-        All requests are authenticated, and database access is restricted with row-level security. No server secret or service key is embedded in the app. Session tokens are stored in the device Keychain.
-
-        YOUR CONTROLS
-
-        You can edit your public name and avatar, sign out at any time, or permanently delete your account from Profile. Account deletion removes your profile, favorites, preferences, predictions and chat identity from our systems.
-        """,
-        """
-        İŞLEDİĞİMİZ VERİLER
-
-        Trendyssey, herkese açık Binance piyasa verilerini analiz eder. Uygulama hiçbir zaman borsa şifrenizi veya API anahtarlarınızı istemez ve varlıklarınızı saklamaz. Borsa gizli bilgilerinizi sohbet veya profil alanlarında paylaşmayınız.
-
-        HESAP VE SENKRONİZASYON
-
-        İlk açılışta, favorilerinizin ve tercihlerinizin senkronize edilebilmesi için anonim bir hesap oluşturulur. Apple ile Giriş'i seçerseniz Apple, paylaşım tercihinize göre adınızı ve e-posta adresinizi iletir. Trendyssey; görünen adınızı, avatarınızı, favorilerinizi, analiz tercihlerinizi ve uyarı ayarlarınızı yalnızca bu özellikleri cihazlarınız arasında sunmak için saklar.
-
-        BİLDİRİMLER VE ABONELİKLER
-
-        Uyarı iletimi için APNs cihaz token'ı ve teslim durumu saklanır. Abonelik hakları, Apple işlem kimlikleri ve geçerlilik tarihleri üzerinden doğrulanır. Ödeme bilgileri yalnızca Apple tarafından işlenir; Trendyssey bu bilgileri hiçbir şekilde görmez veya saklamaz.
-
-        TOPLULUK İÇERİĞİ
-
-        Sohbet mesajları ve kırılım tahminleri; görünen adınız, avatarınız ve gönderim zamanıyla birlikte giriş yapmış kullanıcılara görünür. Sonuçlanan tahminlerinizden türetilen isabet istatistikleri, herkese açık bir rozet olarak gösterilir. Kişisel, finansal veya gizli bilgi paylaşmayınız. İçerikler süreklilik, kötüye kullanımın önlenmesi ve moderasyon amacıyla saklanabilir.
-
-        GÜVENLİK
-
-        Tüm istekler kimlik doğrulamalıdır ve veritabanı erişimi satır düzeyi güvenlikle sınırlandırılmıştır. Uygulamaya hiçbir sunucu gizli anahtarı gömülü değildir. Oturum bilgileri cihazın Anahtar Zinciri'nde (Keychain) saklanır.
-
-        KONTROLLERİNİZ
-
-        Profil bölümünden herkese açık adınızı ve avatarınızı düzenleyebilir, dilediğiniz an oturumu kapatabilir veya hesabınızı kalıcı olarak silebilirsiniz. Hesap silme işlemi; profilinizi, favorilerinizi, tercihlerinizi, tahminlerinizi ve sohbet kimliğinizi sistemlerimizden kaldırır.
-        """
-    ) }
-
-    static var risk: String { L10n.text(
-        """
-        NO INVESTMENT ADVICE
-
-        Trendyssey provides statistical market observations and community discussion for educational and research purposes only. Nothing in the app constitutes investment, legal, tax or personalized financial advice, a recommendation, or an offer or solicitation to buy or sell any asset.
-
-        MATERIAL RISK OF LOSS
-
-        Crypto assets are highly volatile and largely unregulated. You may lose part or all of the capital you commit. Leverage magnifies losses and can lead to liquidation. Commit only capital whose loss you understand and can afford.
-
-        MODEL AND SIGNAL LIMITATIONS
-
-        A high confidence score describes current market structure; it is not a probability of success. Breakouts fail regularly — due to liquidity conditions, news events, manipulation, price gaps, data latency or changing market regimes. Historical outcome measurements, model statistics and community predictions do not guarantee future performance.
-
-        EXECUTION RISK
-
-        Trendyssey does not execute orders and cannot account for your fees, taxes, slippage, position sizing or exchange availability. Market data and notifications may be delayed or temporarily unavailable. Always verify price and conditions on the exchange before acting.
-
-        YOUR RESPONSIBILITY
-
-        You remain solely responsible for your research, decisions, account security and compliance with the laws of your jurisdiction. Community content is user-generated and may be inaccurate, biased or promotional; popularity is not evidence.
-        """,
-        """
-        YATIRIM TAVSİYESİ DEĞİLDİR
-
-        Trendyssey; yalnızca eğitim ve araştırma amacıyla istatistiksel piyasa gözlemleri ve topluluk tartışması sunar. Uygulamadaki hiçbir içerik yatırım, hukuk, vergi veya kişiye özel finansal danışmanlık, öneri ya da herhangi bir varlığın alım-satımına yönelik teklif niteliği taşımaz.
-
-        ÖNEMLİ KAYIP RİSKİ
-
-        Kripto varlıklar yüksek oynaklığa sahiptir ve büyük ölçüde düzenlenmemiştir. Ayırdığınız sermayenin bir kısmını veya tamamını kaybedebilirsiniz. Kaldıraç kayıpları büyütür ve likidasyona yol açabilir. Yalnızca kaybını anlayabildiğiniz ve karşılayabileceğiniz sermayeyi kullanın.
-
-        MODEL VE SİNYAL SINIRLARI
-
-        Yüksek güven puanı mevcut piyasa yapısını tanımlar; bir başarı olasılığı değildir. Kırılımlar düzenli olarak başarısız olur — likidite koşulları, haber akışı, manipülasyon, fiyat boşlukları, veri gecikmesi veya değişen piyasa rejimleri nedeniyle. Geçmiş sonuç ölçümleri, model istatistikleri ve topluluk tahminleri gelecekteki performansı garanti etmez.
-
-        İŞLEM RİSKİ
-
-        Trendyssey emir iletmez; komisyonlarınızı, vergilerinizi, fiyat kaymasını, pozisyon büyüklüğünüzü veya borsa erişilebilirliğini hesaba katamaz. Piyasa verileri ve bildirimler gecikebilir veya geçici olarak kullanılamayabilir. İşlem yapmadan önce fiyatı ve koşulları her zaman borsada doğrulayın.
-
-        SORUMLULUĞUNUZ
-
-        Araştırmanızdan, kararlarınızdan, hesap güvenliğinizden ve bulunduğunuz ülkenin mevzuatına uyumdan yalnızca siz sorumlusunuz. Topluluk içerikleri kullanıcı üretimidir; hatalı, taraflı veya tanıtım amaçlı olabilir. Popülerlik kanıt değildir.
-        """
-    ) }
 }

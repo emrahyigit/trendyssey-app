@@ -14,6 +14,13 @@ struct TrendysseyApp: App {
                 .environment(environment)
                 .environment(\.locale, (AppLanguage(rawValue: appLanguage) ?? .english).locale)
                 .preferredColorScheme((AppThemeMode(rawValue: themeMode) ?? .system).colorScheme)
+                // Localized strings come from L10n, which reads UserDefaults —
+                // invisible to SwiftUI, so a view whose inputs did not change is
+                // free to keep its old text. Picker options were the visible
+                // symptom: their ForEach identities never change, so they stayed
+                // in the previous language until relaunch. Keying the tree on the
+                // language rebuilds everything exactly when it changes.
+                .id(appLanguage)
         }
     }
 }

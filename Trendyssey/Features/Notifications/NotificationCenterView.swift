@@ -94,8 +94,15 @@ private struct NotificationRow: View {
                     Text(item.createdAt, format: .relative(presentation: .named))
                         .font(.caption2).foregroundStyle(TrendysseyColor.secondaryText).lineLimit(1)
                 }
-                Text(displayBody).font(.caption).foregroundStyle(TrendysseyColor.secondaryText).lineSpacing(3)
-                if item.signal != nil {
+                // For a signal alert the server body is the same confidence, risk and
+                // volume numbers the chips below already carry, so it is dropped
+                // rather than shown twice. Notifications without a signal have no
+                // chips, and keep their body.
+                if item.signal == nil {
+                    Text(displayBody).font(.caption).foregroundStyle(TrendysseyColor.secondaryText).lineSpacing(3)
+                }
+                if let signal = item.signal {
+                    signalMetrics(signal)
                     Label(L10n.text("View details", "Detayı görüntüle"), systemImage: "arrow.up.right")
                         .font(.caption2.weight(.semibold)).foregroundStyle(TrendysseyColor.accent)
                 }
@@ -104,6 +111,45 @@ private struct NotificationRow: View {
         .padding(16)
         .background(item.isUnread ? TrendysseyColor.elevated.opacity(0.72) : TrendysseyColor.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         .overlay { RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(TrendysseyColor.border, lineWidth: 1) }
+    }
+
+    /// The two numbers that decide whether an alert is worth opening: how strong
+    /// the signal scored and how much money actually trades in the pair.
+    private func signalMetrics(_ signal: MarketSignal) -> some View {
+        HStack(spacing: 6) {
+            metric(
+                L10n.text("Confidence \(signal.confidence)", "Güven \(signal.confidence)"),
+                icon: "gauge.with.needle",
+                tint: strengthColor(signal.confidence)
+            )
+            metric(
+                L10n.text("Vol. $\(compactVolume(signal.quoteVolume24h))", "Hacim $\(compactVolume(signal.quoteVolume24h))"),
+                icon: "chart.bar.fill",
+                tint: TrendysseyColor.secondaryText
+            )
+        }
+    }
+
+    private func metric(_ title: String, icon: String, tint: Color) -> some View {
+        Label(title, systemImage: icon)
+            .font(.caption2.weight(.semibold)).monospacedDigit()
+            .foregroundStyle(tint)
+            .lineLimit(1)
+            .padding(.horizontal, 8).padding(.vertical, 5)
+            .background(tint.opacity(0.12), in: Capsule())
+    }
+
+    private func compactVolume(_ value: Double) -> String {
+        value.formatted(.number.notation(.compactName).precision(.significantDigits(3)).locale(L10n.locale))
+    }
+
+    private func strengthColor(_ score: Int) -> Color {
+        switch score {
+        case 75...: TrendysseyColor.positive
+        case 50..<75: TrendysseyColor.accent
+        case 30..<50: TrendysseyColor.warning
+        default: TrendysseyColor.negative
+        }
     }
 
     private var icon: String {

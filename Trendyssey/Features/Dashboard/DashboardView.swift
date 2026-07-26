@@ -4,7 +4,21 @@ struct DashboardView: View {
     @Environment(AppEnvironment.self) private var environment
     @State private var store = DashboardStore()
     @AppStorage("preferredTimeframe") private var preferredTimeframe = "15m"
-    @AppStorage(AnalysisModelSelection.storageKey) private var preferredAnalysisModel = AnalysisModelSelection.defaultSlug
+    @AppStorage(JourneyModel.storageKey) private var journeyModel = JourneyModel.emaCross.rawValue
+
+    /// A featured breakout has to clear this. Without it the section fills with
+    /// coins that are technically in a breakout phase but scored so low that the
+    /// move carries no weight.
+    private static let minimumConfidence = 50
+
+    /// Phases that mean the breakout is under way: it started, it is being
+    /// retested, or it strengthened.
+    private static let breakoutPhases: Set<SignalStatus> = [.breakoutDetected, .confirmed, .retest]
+
+    // Lists filter on the same server-recorded phase and score the cards
+    // display, so selection and display always agree.
+    private func phase(for signal: MarketSignal) -> SignalStatus { signal.status }
+    private func confidence(for signal: MarketSignal) -> Int { signal.confidence }
 
     var body: some View {
         ScrollView {
@@ -18,9 +32,13 @@ struct DashboardView: View {
             }.padding(.horizontal, 18).padding(.bottom, 28)
         }
         .background(TrendysseyColor.canvas.ignoresSafeArea()).toolbar(.hidden, for: .navigationBar)
-        .task(id: "\(preferredAnalysisModel)|\(preferredTimeframe)") { await store.retry(using: environment.marketService) }
+        .task(id: "\(journeyModel)|\(preferredTimeframe)") {
+            await store.retry(using: environment.marketService)
+        }
         .task { await environment.notificationStore.refresh() }
-        .refreshable { await store.retry(using: environment.marketService) }
+        .refreshable {
+            await store.retry(using: environment.marketService)
+        }
     }
 
     private var header: some View {
@@ -66,8 +84,13 @@ struct DashboardView: View {
     }
 
     @ViewBuilder private func content(_ overview: MarketOverview) -> some View {
-        let breakouts = overview.signals.filter { [.breakoutDetected, .confirmed, .retest].contains($0.status) }
-        let waiting = overview.signals.filter { $0.status == .preBreakout }
+        // Featured = the breakout is under way, it scored well enough to be worth
+        // surfacing, and the biggest money is shown first.
+        let breakouts = overview.signals
+            .filter { Self.breakoutPhases.contains(phase(for: $0)) }
+            .filter { confidence(for: $0) >= Self.minimumConfidence }
+            .sorted { $0.quoteVolume24h > $1.quoteVolume24h }
+        let waiting = overview.signals.filter { phase(for: $0) == .preBreakout }
         let topVolume50 = Array(
             overview.signals
                 .sorted { $0.quoteVolume24h > $1.quoteVolume24h }
@@ -75,16 +98,25 @@ struct DashboardView: View {
         )
         let averages = averageMetrics(for: topVolume50)
         HStack(spacing: 10) {
-            stat(L10n.text("AVG. STRENGTH", "GÜÇ ORT."), averages.confidence, "checkmark.shield.fill")
+            stat(L10n.text("AVG. CONFIDENCE", "GÜVEN ORT."), averages.confidence, "checkmark.shield.fill")
             stat(L10n.text("AVG. VOLUME", "HACİM ORT."), averages.volume, "chart.bar.fill")
         }
         VStack(alignment: .leading, spacing: 12) {
             sectionTitle(
                 L10n.text("Featured Breakouts", "Öne Çıkan Kırılımlar"),
-                subtitle: L10n.text("Moves started on closed \(AnalysisTimeframe.selected.title) candles", "Kapanmış \(AnalysisTimeframe.selected.title) mumlarında başlayan hareketler")
+                subtitle: L10n.text(
+                    "Confidence \(Self.minimumConfidence)+ on closed \(AnalysisTimeframe.selected.title) candles, highest 24h volume first",
+                    "Kapanmış \(AnalysisTimeframe.selected.title) mumlarında \(Self.minimumConfidence)+ güven puanı, en yüksek 24s hacim önce"
+                )
             )
             if breakouts.isEmpty {
-                emptyRow(L10n.text("No featured breakout right now", "Şu anda öne çıkan kırılım yok"), icon: "chart.line.uptrend.xyaxis")
+                emptyRow(
+                    L10n.text(
+                        "No breakout is scoring \(Self.minimumConfidence) or above right now",
+                        "Şu anda \(Self.minimumConfidence) ve üzeri puan alan kırılım yok"
+                    ),
+                    icon: "chart.line.uptrend.xyaxis"
+                )
             } else {
                 ScrollView(.horizontal) {
                     LazyHStack(spacing: 12) {

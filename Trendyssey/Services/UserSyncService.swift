@@ -88,8 +88,8 @@ actor UserSyncService {
         let preferences = Preferences(
             notificationsEnabled: defaults.bool(forKey: "notificationsEnabled"),
             preferredTimeframe: defaults.string(forKey: "preferredTimeframe") ?? "15m",
-            analysisModelSlug: defaults.string(forKey: AnalysisModelSelection.storageKey) ?? AnalysisModelSelection.defaultSlug,
-            minimumScore: 0,
+            analysisModelSlug: AnalysisModelSelection.selectedSlug,
+            minimumScore: defaults.integer(forKey: "notificationMinimumScore"),
             maximumRisk: 100,
             minimumVolumeRatio: 0.0,
             statuses: statuses,

@@ -1,50 +1,10 @@
 import Foundation
 
-/// A single lifecycle transition detected from EMA 7/25/99 crossover analysis.
-struct EMAJourneyEvent: Identifiable, Hashable, Sendable {
-    let status: SignalStatus
-    let time: Date
-    let price: Double
-
-    var id: Date { time }
-}
-
-/// One scored ingredient of the overall confidence score, e.g. "Volume support 4/20".
-struct ConfidenceFactor: Identifiable, Sendable {
-    let key: String
-    let title: String
-    let detail: String
-    let score: Int
-    let maxScore: Int
-
-    var id: String { key }
-    var strength: Double { maxScore > 0 ? Double(score) / Double(maxScore) : 0 }
-}
-
-/// Result of analysing a symbol's closed candles with Binance's default EMA set (7 / 25 / 99).
-struct EMAJourneyAnalysis: Sendable {
-    /// Closed candles the analysis ran on, oldest first.
-    let candles: [PriceCandle]
-    /// EMA series aligned index-by-index with `candles`; nil while warming up.
-    let emaFast: [Double?]
-    let emaMedium: [Double?]
-    let emaLong: [Double?]
-    let events: [EMAJourneyEvent]
-    let currentPhase: SignalStatus
-    let confidence: Int
-    let factors: [ConfidenceFactor]
-    let volumeRatio: Double
-
-    func events(lastHours hours: Double, now: Date = .now) -> [EMAJourneyEvent] {
-        let cutoff = now.addingTimeInterval(-hours * 3600)
-        return events.filter { $0.time >= cutoff }
-    }
-}
-
 /// Detects breakout journeys from EMA 7/25 crossovers (EMA 99 as the long-term filter),
 /// matching the moving averages Binance shows by default, and derives a single
 /// 0–100 confidence score with human-readable reasons.
-enum EMAJourneyAnalyzer {
+enum EMAJourneyAnalyzer: JourneyDetector {
+    nonisolated static let model = JourneyModel.emaCross
     nonisolated static let fastPeriod = 7
     nonisolated static let mediumPeriod = 25
     nonisolated static let longPeriod = 99
@@ -53,7 +13,7 @@ enum EMAJourneyAnalyzer {
         candles allCandles: [PriceCandle],
         higherTimeframeCandles: [PriceCandle]? = nil,
         higherTimeframeTitle: String? = nil
-    ) -> EMAJourneyAnalysis? {
+    ) -> JourneyAnalysis? {
         let candles = allCandles.filter(\.isClosed)
         guard candles.count >= mediumPeriod + 5 else { return nil }
         let closes = candles.map(\.close)
@@ -64,7 +24,7 @@ enum EMAJourneyAnalyzer {
         let (events, phase, lastCrossIndex, retestState) = journey(
             candles: candles, emaFast: emaFast, emaMedium: emaMedium
         )
-        let volumeRatio = latestVolumeRatio(candles: candles)
+        let volumeRatio = JourneyAnalyzer.latestVolumeRatio(candles: candles)
         var factors = confidenceFactors(
             candles: candles,
             emaFast: emaFast,
@@ -76,24 +36,25 @@ enum EMAJourneyAnalyzer {
             volumeRatio: volumeRatio
         )
         if let confluence = confluenceFactor(
+            direction: .bullish,
             higherTimeframeCandles: higherTimeframeCandles,
             higherTimeframeTitle: higherTimeframeTitle
         ) {
             factors.append(confluence)
         }
-        // Normalize so the score stays on a 0–100 scale even when the
-        // higher-timeframe ingredient is unavailable.
-        let achieved = factors.reduce(0) { $0 + $1.score }
-        let achievable = factors.reduce(0) { $0 + $1.maxScore }
-        let confidence = min(100, max(0, Int((Double(achieved) * 100 / Double(max(achievable, 1))).rounded())))
-        return EMAJourneyAnalysis(
+        return JourneyAnalysis(
+            model: model,
             candles: candles,
-            emaFast: emaFast,
-            emaMedium: emaMedium,
-            emaLong: emaLong,
+            series: [
+                JourneySeries(key: "ema7", title: "EMA 7", values: emaFast),
+                JourneySeries(key: "ema25", title: "EMA 25", values: emaMedium),
+                JourneySeries(key: "ema99", title: "EMA 99", values: emaLong),
+            ],
+            levels: [],
+            markers: [],
             events: events,
             currentPhase: phase,
-            confidence: confidence,
+            confidence: JourneyAnalyzer.confidence(from: factors),
             factors: factors,
             volumeRatio: volumeRatio
         )
@@ -124,9 +85,9 @@ enum EMAJourneyAnalyzer {
         candles: [PriceCandle],
         emaFast: [Double?],
         emaMedium: [Double?]
-    ) -> ([EMAJourneyEvent], SignalStatus, Int?, Bool) {
+    ) -> ([JourneyEvent], SignalStatus, Int?, Bool) {
         var state: SignalStatus = .watching
-        var events: [EMAJourneyEvent] = []
+        var events: [JourneyEvent] = []
         var crossIndex: Int?
         var lastCrossIndex: Int?
         var retest: RetestState = .none
@@ -203,21 +164,13 @@ enum EMAJourneyAnalyzer {
 
             if newState != state {
                 state = newState
-                events.append(EMAJourneyEvent(status: state, time: candle.closeTime, price: candle.close))
+                events.append(JourneyEvent(status: state, time: candle.closeTime, price: candle.close))
             }
         }
         return (events, state, lastCrossIndex, retest == .held)
     }
 
     // MARK: - Confidence
-
-    private nonisolated static func latestVolumeRatio(candles: [PriceCandle]) -> Double {
-        guard let last = candles.last, candles.count > 1 else { return 0 }
-        let history = candles.dropLast().suffix(20)
-        let average = history.map(\.volume).reduce(0, +) / Double(max(history.count, 1))
-        guard average > 0 else { return 0 }
-        return last.volume / average
-    }
 
     private nonisolated static func confidenceFactors(
         candles: [PriceCandle],
@@ -326,21 +279,7 @@ enum EMAJourneyAnalyzer {
         factors.append(retestFactor)
 
         // 4. Volume support (max 20)
-        let volumeMax = 20
-        let formattedRatio = volumeRatio.formatted(.number.precision(.fractionLength(1)))
-        let (volumeScore, volumeTitle): (Int, String) = switch volumeRatio {
-        case 2...: (volumeMax, L10n.text("Volume very strong", "Hacim çok güçlü"))
-        case 1.5..<2: (15, L10n.text("Volume strong", "Hacim güçlü"))
-        case 1..<1.5: (11, L10n.text("Volume normal", "Hacim normal"))
-        case 0.7..<1: (6, L10n.text("Volume below average", "Hacim ortalamanın altında"))
-        default: (2, L10n.text("Volume low", "Hacim düşük"))
-        }
-        factors.append(ConfidenceFactor(
-            key: "volume",
-            title: volumeTitle,
-            detail: L10n.text("The last closed candle traded \(formattedRatio)x the 20-candle average volume.", "Son kapanan mumda hacim, 20 mum ortalamasının \(formattedRatio) katıydı."),
-            score: volumeScore, maxScore: volumeMax
-        ))
+        factors.append(JourneyAnalyzer.volumeFactor(ratio: volumeRatio))
 
         // 5. Long-term trend vs EMA 99 (max 10)
         let longMax = 10
@@ -407,9 +346,11 @@ enum EMAJourneyAnalyzer {
 
     // MARK: - Higher-timeframe confluence (max 10)
 
-    /// Scores how well the next timeframe up agrees with the move, so breakouts
-    /// that trade with the larger trend rank above counter-trend ones.
-    private nonisolated static func confluenceFactor(
+    /// Scores how well the next timeframe up agrees with the move, so setups that
+    /// trade with the larger trend rank above counter-trend ones. Shared by every
+    /// model; a bearish journey wants the higher timeframe stacked downward.
+    nonisolated static func confluenceFactor(
+        direction: JourneyDirection,
         higherTimeframeCandles: [PriceCandle]?,
         higherTimeframeTitle: String?
     ) -> ConfidenceFactor? {
@@ -424,27 +365,37 @@ enum EMAJourneyAnalyzer {
         let long = ema(closes, period: longPeriod)[lastIndex]
         let timeframe = higherTimeframeTitle ?? ""
         let close = closes[lastIndex]
+        let agrees = direction == .bullish ? fast > medium : fast < medium
+        let fullyStacked = direction == .bullish
+            ? long.map { medium > $0 && close > fast } ?? false
+            : long.map { medium < $0 && close < fast } ?? false
 
-        if fast > medium, let long, medium > long, close > fast {
+        if agrees, fullyStacked {
             return ConfidenceFactor(
                 key: "confluence",
                 title: L10n.text("Higher timeframe fully aligned", "Üst dilim tam uyumlu"),
-                detail: L10n.text("On the \(timeframe) chart, price and all three EMAs are stacked upward — the move trades with the larger trend.", "\(timeframe) grafiğinde fiyat ve üç EMA da yükseliş yönünde sıralı — hareket büyük trendle aynı yönde."),
+                detail: direction == .bullish
+                    ? L10n.text("On the \(timeframe) chart, price and all three EMAs are stacked upward — the move trades with the larger trend.", "\(timeframe) grafiğinde fiyat ve üç EMA da yükseliş yönünde sıralı — hareket büyük trendle aynı yönde.")
+                    : L10n.text("On the \(timeframe) chart, price and all three EMAs are stacked downward — the move trades with the larger trend.", "\(timeframe) grafiğinde fiyat ve üç EMA da düşüş yönünde sıralı — hareket büyük trendle aynı yönde."),
                 score: confluenceMax, maxScore: confluenceMax
             )
         }
-        if fast > medium {
+        if agrees {
             return ConfidenceFactor(
                 key: "confluence",
                 title: L10n.text("Higher timeframe supportive", "Üst dilim destekliyor"),
-                detail: L10n.text("On the \(timeframe) chart, EMA 7 is above EMA 25; the larger trend leans upward.", "\(timeframe) grafiğinde EMA 7, EMA 25'in üzerinde; büyük trend yukarı eğilimli."),
+                detail: direction == .bullish
+                    ? L10n.text("On the \(timeframe) chart, EMA 7 is above EMA 25; the larger trend leans upward.", "\(timeframe) grafiğinde EMA 7, EMA 25'in üzerinde; büyük trend yukarı eğilimli.")
+                    : L10n.text("On the \(timeframe) chart, EMA 7 is below EMA 25; the larger trend leans downward.", "\(timeframe) grafiğinde EMA 7, EMA 25'in altında; büyük trend aşağı eğilimli."),
                 score: 7, maxScore: confluenceMax
             )
         }
         return ConfidenceFactor(
             key: "confluence",
             title: L10n.text("Higher timeframe opposed", "Üst dilim ters yönde"),
-            detail: L10n.text("On the \(timeframe) chart, EMA 7 is below EMA 25 — the breakout is moving against the larger trend.", "\(timeframe) grafiğinde EMA 7, EMA 25'in altında — kırılım büyük trende karşı ilerliyor."),
+            detail: direction == .bullish
+                ? L10n.text("On the \(timeframe) chart, EMA 7 is below EMA 25 — the breakout is moving against the larger trend.", "\(timeframe) grafiğinde EMA 7, EMA 25'in altında — kırılım büyük trende karşı ilerliyor.")
+                : L10n.text("On the \(timeframe) chart, EMA 7 is above EMA 25 — the breakdown is moving against the larger trend.", "\(timeframe) grafiğinde EMA 7, EMA 25'in üzerinde — düşüş büyük trende karşı ilerliyor."),
             score: 1, maxScore: confluenceMax
         )
     }
