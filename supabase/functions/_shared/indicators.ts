@@ -577,9 +577,11 @@ export function analyze(candles: MarketCandle[], inputConfiguration: unknown, co
   };
 }
 
-/// Single confidence score shared with the on-device Swift engine:
-/// alignment 25 + cross freshness 15 + retest 15 + volume 20 + long-term 15 + momentum 10.
-export function emaConfidence(a: any, state: string): number {
+/// The scored ingredients of the unified EMA crossover confidence, shared with
+/// the on-device Swift engine: alignment 25 + cross freshness 15 + retest 15 +
+/// volume 20 + long-term 15 + momentum 10. Stored on the signal's evidence so
+/// the app's "why this score" list always sums to the score it explains.
+export function emaConfidenceFactors(a: any, state: string): Array<{ key: string; score: number; maxScore: number }> {
   const alignment = a.emaFast > a.emaSlow && a.emaSlow > a.emaLong ? 25 : a.emaFast > a.emaSlow ? 14 : 2;
   const inJourney = state === "breakout_detected" || state === "retest" || state === "confirmed";
   let cross = 0;
@@ -596,7 +598,21 @@ export function emaConfidence(a: any, state: string): number {
   const longTerm = a.current.close > a.emaLong ? (a.emaLongRising ? 15 : 10) : 2;
   const streak = a.closesAboveFastStreak;
   const momentum = streak >= 3 ? 10 : streak === 2 ? 7 : streak === 1 ? 4 : 0;
-  return Math.min(100, Math.max(0, alignment + cross + retest + volume + longTerm + momentum));
+  return [
+    { key: "alignment", score: alignment, maxScore: 25 },
+    { key: "cross", score: cross, maxScore: 15 },
+    { key: "retest", score: retest, maxScore: 15 },
+    { key: "volume", score: volume, maxScore: 20 },
+    { key: "longTerm", score: longTerm, maxScore: 15 },
+    { key: "momentum", score: momentum, maxScore: 10 },
+  ];
+}
+
+/// The unified score is the sum of its stored ingredients, so the two can
+/// never drift apart.
+export function emaConfidence(a: any, state: string): number {
+  const total = emaConfidenceFactors(a, state).reduce((sum, factor) => sum + factor.score, 0);
+  return Math.min(100, Math.max(0, total));
 }
 
 export function applySignalState(analysis: any, state: string): any {

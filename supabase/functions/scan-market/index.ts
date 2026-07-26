@@ -26,6 +26,7 @@ import {
 import {
   analyze,
   applySignalState,
+  emaConfidenceFactors,
   type MarketCandle,
   parseKlines,
   resolveTimeframeScoringConfiguration,
@@ -526,6 +527,9 @@ async function scanEMA(
       bollingerBandWidthChangePercent: a.bollingerBandWidthChange,
       quoteVolume24h: Number(symbol.quote_volume_24h ?? 0),
       scoreComponents: a.scoreComponents,
+      // The unified score's own ingredients — this list sums to
+      // breakout_confidence_score, which is what the detail page explains.
+      confidenceFactors: emaConfidenceFactors(a, status),
     },
   };
   const signal = previous?.id

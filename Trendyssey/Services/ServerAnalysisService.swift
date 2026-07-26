@@ -164,26 +164,56 @@ actor ServerAnalysisService {
 
     // MARK: - Mapping
 
-    /// "Why this score" rows, exactly as the server scored them.
+    /// "Why this score" rows, exactly as the server scored them. Both model
+    /// families store the score's own ingredients in `confidenceFactors`, so
+    /// the rows always sum to the score they explain.
     private func factors(model: JourneyModel, evidence: SignalEvidence?) -> [ConfidenceFactor] {
+        let stored = evidence?.confidenceFactors ?? []
         switch model {
         case .emaCross:
-            return (evidence?.scoreComponents ?? [])
-                .filter { $0.metric == "confidence" }
-                .map { component in
-                    ConfidenceFactor(
-                        key: component.key,
-                        title: component.name,
-                        detail: component.explanation,
-                        score: Int(component.contribution.rounded()),
-                        maxScore: Int(component.maximumScore.rounded())
-                    )
-                }
+            guard !stored.isEmpty else {
+                // Rows written before the ingredient list existed: fall back to
+                // the engine components until the next scan refreshes them.
+                return (evidence?.scoreComponents ?? [])
+                    .filter { $0.metric == "confidence" }
+                    .map { component in
+                        ConfidenceFactor(
+                            key: component.key,
+                            title: component.name,
+                            detail: component.explanation,
+                            score: Int(component.contribution.rounded()),
+                            maxScore: Int(component.maximumScore.rounded())
+                        )
+                    }
+            }
+            return stored.map { factor in
+                let text = Self.emaFactorText(factor.key)
+                return ConfidenceFactor(key: factor.key, title: text.title, detail: text.detail, score: factor.score, maxScore: factor.maxScore)
+            }
         case .doubleBottom, .doubleTop:
-            return (evidence?.confidenceFactors ?? []).map { factor in
+            return stored.map { factor in
                 let text = Self.patternFactorText(factor.key)
                 return ConfidenceFactor(key: factor.key, title: text.title, detail: text.detail, score: factor.score, maxScore: factor.maxScore)
             }
+        }
+    }
+
+    private static func emaFactorText(_ key: String) -> (title: String, detail: String) {
+        switch key {
+        case "alignment":
+            (L10n.text("Trend alignment", "Trend dizilimi"), L10n.text("Price above EMA 7, EMA 7 above EMA 25, EMA 25 above EMA 99.", "Fiyat EMA 7'nin, EMA 7 EMA 25'in, EMA 25 EMA 99'un üzerinde."))
+        case "cross":
+            (L10n.text("Crossover freshness", "Kesişim tazeliği"), L10n.text("How recently EMA 7 crossed above EMA 25.", "EMA 7'nin EMA 25'i ne kadar yakın zamanda yukarı kestiği."))
+        case "retest":
+            (L10n.text("Retest", "Yeniden test"), L10n.text("Whether the EMA zone held when price came back to it.", "Fiyat geri döndüğünde EMA bölgesinin tutup tutmadığı."))
+        case "volume":
+            (L10n.text("Volume support", "Hacim desteği"), L10n.text("Last closed candle against the 20-candle average volume.", "Son kapanan mumun 20 mum ortalama hacmine oranı."))
+        case "longTerm":
+            (L10n.text("Long-term trend", "Uzun vadeli trend"), L10n.text("Price against a rising or falling EMA 99.", "Fiyatın yükselen ya da düşen EMA 99'a göre konumu."))
+        case "momentum":
+            (L10n.text("Momentum", "Momentum"), L10n.text("Consecutive closes above EMA 7.", "EMA 7 üzerinde art arda kapanış sayısı."))
+        default:
+            (key, "")
         }
     }
 
