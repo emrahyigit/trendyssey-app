@@ -143,21 +143,7 @@ const TIMEFRAME_THRESHOLD_OVERRIDES: Record<string, Record<string, number>> = {
     maximumDetectionAge: 4,
     maximumJourneyAge: 16,
   },
-  "30m": {
-    minimumBreakoutClearanceAtr: 0.11,
-    minimumBreakoutVolumeRatio: 1.35,
-    minimumBreakoutAdx: 20,
-    maximumDetectionAge: 4,
-    maximumJourneyAge: 14,
-  },
   "1h": {},
-  "2h": {
-    proximityAtr: 0.32,
-    minimumBreakoutVolumeRatio: 1.25,
-    minimumBreakoutAdx: 19,
-    maximumDetectionAge: 3,
-    maximumJourneyAge: 10,
-  },
   "4h": {
     proximityAtr: 0.30,
     minimumBreakoutClearanceAtr: 0.08,
@@ -166,15 +152,6 @@ const TIMEFRAME_THRESHOLD_OVERRIDES: Record<string, Record<string, number>> = {
     confirmationMinimumVolumeRatio: 0.80,
     maximumRetestAge: 10,
     maximumJourneyAge: 8,
-  },
-  "6h": {
-    proximityAtr: 0.28,
-    minimumBreakoutClearanceAtr: 0.08,
-    minimumBreakoutVolumeRatio: 1.18,
-    minimumBreakoutAdx: 18,
-    confirmationMinimumVolumeRatio: 0.80,
-    maximumRetestAge: 8,
-    maximumJourneyAge: 7,
   },
   "1d": {
     proximityAtr: 0.25,

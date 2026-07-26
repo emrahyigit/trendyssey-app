@@ -18,10 +18,9 @@ import { json, requireCronSecret } from "../_shared/http.ts";
 import { adminClient } from "../_shared/supabase.ts";
 import { includesCryptoBaseAsset } from "../_shared/asset_universe.ts";
 import {
-  ROTATING_BATCH_SLOTS,
-  ROTATING_UNIVERSE_SIZE,
-  rotatingBatch,
-  rotatingSlotForUTCMinute,
+  SCAN_BATCH_SLOTS,
+  SCAN_UNIVERSE_SIZE,
+  scanBatch,
 } from "../_shared/scan_batches.ts";
 import {
   analyze,
@@ -38,15 +37,12 @@ import {
   type Direction,
 } from "../_shared/double-pattern.ts";
 
-const supportedTimeframes = new Set(["15m", "30m", "1h", "2h", "4h", "6h", "1d"]);
+const supportedTimeframes = new Set(["15m", "1h", "4h", "1d"]);
 
 const timeframeMilliseconds: Record<string, number> = {
   "15m": 900_000,
-  "30m": 1_800_000,
   "1h": 3_600_000,
-  "2h": 7_200_000,
   "4h": 14_400_000,
-  "6h": 21_600_000,
   "1d": 86_400_000,
 };
 
@@ -55,28 +51,6 @@ const DOUBLE_PATTERN_DIRECTIONS: Record<string, Direction> = {
   "double-bottom-v1": "bullish",
   "double-top-v1": "bearish",
 };
-
-/**
- * The whole enabled universe is covered by two lanes. The fast lane is the
- * existing candle-close-aligned crons over the highest-volume pairs, keeping
- * push latency where it was. Sweep runs (`{"sweep": true}`) rotate through
- * everything below the fast lane in fixed batches: the slot advances with
- * wall-clock time at each timeframe's sweep cadence, so a full rotation always
- * completes within one candle period and a missed run self-heals on the next.
- */
-const FAST_LANE_SIZE = 50;
-const SWEEP_BATCH_SIZE = 45;
-/** Must match the sweep crons' firing cadence, or slots repeat instead of rotating. */
-const SWEEP_CADENCE_MINUTES: Record<string, number> = {
-  "15m": 1, "30m": 2, "1h": 3, "2h": 6, "4h": 12, "6h": 18, "1d": 30,
-};
-
-function sweepSlot(timeframe: string, poolSize: number, explicit?: unknown): number {
-  const slots = Math.max(1, Math.ceil(poolSize / SWEEP_BATCH_SIZE));
-  if (Number.isInteger(explicit)) return Math.min(slots - 1, Math.max(0, Number(explicit)));
-  const cadence = SWEEP_CADENCE_MINUTES[timeframe] ?? 6;
-  return Math.floor(Date.now() / 60_000 / cadence) % slots;
-}
 
 /**
  * 502 candles: the pattern analyzer sees the same ~500-candle window the app
@@ -107,45 +81,6 @@ async function fetchClosedCandles(symbol: string, timeframe: string): Promise<Ma
 /** Last-candle volume against the 20-candle average, as a 0-100 activity score. */
 function patternActivityScore(volumeRatio: number): number {
   return Math.round(Math.min(1, Math.max(0, (volumeRatio - 0.5) / 2.5)) * 100);
-}
-
-/**
- * The candle store is the single input the app and the server both read. The
- * scan writes the tail of exactly the candles it analyzed, so the store can
- * never lag behind a signal it produced; sync-candles sweeps wider and deeper
- * on its own schedule.
- */
-const STORE_TAIL_CANDLES = 3;
-
-async function ingestCandleTail(
-  supabase: any,
-  symbolID: string,
-  timeframe: string,
-  candles: MarketCandle[],
-): Promise<void> {
-  const tail = candles.slice(-STORE_TAIL_CANDLES).map((candle) => ({
-    symbol_id: symbolID,
-    timeframe,
-    open_time: new Date(candle.openTime).toISOString(),
-    close_time: new Date(candle.closeTime).toISOString(),
-    open: candle.open,
-    high: candle.high,
-    low: candle.low,
-    close: candle.close,
-    volume: candle.volume,
-    quote_volume: candle.quoteVolume,
-    trade_count: candle.trades,
-    taker_buy_base_volume: candle.takerBuyBase,
-    taker_buy_quote_volume: candle.takerBuyQuote,
-  }));
-  if (tail.length === 0) return;
-  const result = await supabase.from("candles").upsert(tail, {
-    onConflict: "symbol_id,timeframe,open_time",
-    ignoreDuplicates: true,
-  });
-  if (result.error) {
-    console.error("candle_ingest_failed", { symbolID, timeframe, message: result.error.message });
-  }
 }
 
 /**
@@ -601,24 +536,20 @@ Deno.serve(async (req) => {
     if (symbolError) throw symbolError;
     let scanned = 0;
     let signals = 0;
-    const eligible = (symbols ?? [])
-      .filter((symbol: any) => includesCryptoBaseAsset(String(symbol.symbol).replace(/USDT$/, "")));
-    const sweep = body.sweep === true;
+    // Only the 100 highest-volume pairs are analyzed at all; everything below
+    // that line is out of the universe and the app reports it as not having
+    // enough volume to analyze.
+    const universe = (symbols ?? [])
+      .filter((symbol: any) => includesCryptoBaseAsset(String(symbol.symbol).replace(/USDT$/, "")))
+      .slice(0, SCAN_UNIVERSE_SIZE);
+    // At every candle close the crons fire all four slots in parallel, so the
+    // whole universe is scanned within the same minute. A run without a slot
+    // (manual invocation) walks the full universe by itself.
     let batchSlot: number | null = null;
-    let candidates: any[];
-    if (sweep) {
-      // Rotate through everything below the fast lane.
-      const pool = eligible.slice(timeframe === "15m" ? ROTATING_UNIVERSE_SIZE : FAST_LANE_SIZE);
-      batchSlot = sweepSlot(timeframe, pool.length, body.batchSlot);
-      candidates = pool.slice(batchSlot * SWEEP_BATCH_SIZE, (batchSlot + 1) * SWEEP_BATCH_SIZE);
-    } else if (timeframe === "15m") {
-      const universe = eligible.slice(0, ROTATING_UNIVERSE_SIZE);
-      batchSlot = Number.isInteger(body.batchSlot)
-        ? Math.min(ROTATING_BATCH_SLOTS - 1, Math.max(0, Number(body.batchSlot)))
-        : rotatingSlotForUTCMinute(new Date().getUTCMinutes());
-      candidates = rotatingBatch(universe, batchSlot);
-    } else {
-      candidates = eligible.slice(0, FAST_LANE_SIZE);
+    let candidates: any[] = universe;
+    if (Number.isInteger(body.batchSlot)) {
+      batchSlot = Math.min(SCAN_BATCH_SLOTS - 1, Math.max(0, Number(body.batchSlot)));
+      candidates = scanBatch(universe, batchSlot);
     }
     for (let offset = 0; offset < candidates.length; offset += 8) {
       const batch = candidates.slice(offset, offset + 8);
@@ -629,7 +560,6 @@ Deno.serve(async (req) => {
           // needs deep history. Gating per model keeps recently listed coins
           // covered on the timeframes where 250 candles simply do not exist yet.
           if (candles.length < 30) return 0;
-          await ingestCandleTail(supabase, symbol.id, timeframe, candles);
           let completedModels = 0;
           for (const model of models) {
             try {
@@ -671,8 +601,7 @@ Deno.serve(async (req) => {
         market: "spot",
         timeframe,
         models: models.map((model: any) => ({ slug: model.slug, displayName: model.display_name })),
-        universe: eligible.length,
-        sweep,
+        universe: universe.length,
         batchSize: candidates.length,
         batchSlot,
         scanned,

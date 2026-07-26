@@ -44,7 +44,7 @@ struct LiveMarketService: MarketService {
         let analyzed = try await loadSignals(includeWatching: true, universeLimit: nil).signals
         let bySymbol = Dictionary(uniqueKeysWithValues: analyzed.map { ($0.symbol, $0) })
         return try await activeSymbols().map { symbol in
-            bySymbol[symbol.symbol] ?? MarketSignal(id: symbol.id, symbol: symbol.symbol, name: symbol.base_asset, iconURL: symbol.icon_url, price: symbol.current_price ?? 0, change24h: symbol.price_change_percent_24h ?? 0, quoteVolume24h: symbol.quote_volume_24h ?? 0, confidence: 0, falseBreakoutRisk: 100, activityScore: 0, volumeRatio: 0, takerBuyRatio: 0.5, estimatedDelta: 0, status: .watching, signalDate: .distantPast, explanation: L10n.text("Insufficient volume or candle history for a reliable score. You can still add this coin to favorites.", "Güvenilir bir skor için hacim veya mum geçmişi yetersiz. Bu coini yine de favorilere ekleyebilirsin."), hasScore: false)
+            bySymbol[symbol.symbol] ?? MarketSignal(id: symbol.id, symbol: symbol.symbol, name: symbol.base_asset, iconURL: symbol.icon_url, price: symbol.current_price ?? 0, change24h: symbol.price_change_percent_24h ?? 0, quoteVolume24h: symbol.quote_volume_24h ?? 0, confidence: 0, falseBreakoutRisk: 100, activityScore: 0, volumeRatio: 0, takerBuyRatio: 0.5, estimatedDelta: 0, status: .watching, signalDate: .distantPast, explanation: L10n.text("Not enough volume to analyze. Only the 100 highest-volume coins are analyzed; you can still add this coin to favorites.", "Analiz için yeterli hacim yok. Sadece hacmi en yüksek 100 coin analiz edilir; bu coini yine de favorilere ekleyebilirsin."), hasScore: false)
         }
     }
 

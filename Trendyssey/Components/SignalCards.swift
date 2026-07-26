@@ -65,7 +65,7 @@ struct SignalRow: View {
                         .font(.caption.weight(.semibold)).foregroundStyle(strengthColor)
                         .lineLimit(1).minimumScaleFactor(0.8)
                 } else {
-                    Label(L10n.text("Outside the scan universe", "Tarama evreni dışında"), systemImage: "antenna.radiowaves.left.and.right.slash")
+                    Label(L10n.text("Not enough volume to analyze", "Analiz için yeterli hacim yok"), systemImage: "antenna.radiowaves.left.and.right.slash")
                         .font(.caption.weight(.semibold)).foregroundStyle(TrendysseyColor.secondaryText)
                         .lineLimit(1).minimumScaleFactor(0.8)
                 }

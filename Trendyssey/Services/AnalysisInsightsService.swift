@@ -33,15 +33,15 @@ enum ScenarioLookback: Int, CaseIterable, Identifiable, Sendable {
     }
 
     /// Candle interval used to replay what price did after each entry. Must be
-    /// a timeframe the server candle store sweeps, and coarse enough that one
+    /// one of the four analysis timeframes, and coarse enough that one
     /// 100-candle fetch spans the whole window — otherwise the tail of a long
     /// scenario would be measured against no data.
     nonisolated var observationInterval: String {
         switch self {
         case .day1: "15m"   // 24h  = 96 candles
-        case .day2: "30m"   // 48h  = 96 candles
+        case .day2: "1h"    // 48h  = 48 candles
         case .day3: "1h"    // 72h  = 72 candles
-        case .week1: "2h"   // 7d   = 84 candles
+        case .week1: "4h"   // 7d   = 42 candles
         case .week2: "4h"   // 14d  = 84 candles
         }
     }
@@ -51,9 +51,8 @@ enum ScenarioLookback: Int, CaseIterable, Identifiable, Sendable {
     static func `default`(for timeframe: AnalysisTimeframe) -> ScenarioLookback {
         switch timeframe {
         case .m15: .day1
-        case .m30: .day2
-        case .h1, .h2: .day3
-        case .h4, .h6: .week1
+        case .h1: .day3
+        case .h4: .week1
         case .d1: .week2
         }
     }

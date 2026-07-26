@@ -8,7 +8,6 @@ struct SignalDetailView: View {
     @State private var candles: [PriceCandle] = []
     @State private var analysis: JourneyAnalysis?
     @State private var chartError = false
-    @State private var outsideUniverse = false
     @AppStorage("preferredTimeframe") private var preferredTimeframe = "15m"
     @AppStorage(JourneyModel.storageKey) private var journeyModel = JourneyModel.emaCross.rawValue
 
@@ -72,11 +71,11 @@ struct SignalDetailView: View {
 
     private var proTeaser: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label(L10n.text("No server analysis yet", "Henüz sunucu analizi yok"), systemImage: "antenna.radiowaves.left.and.right.slash")
+            Label(L10n.text("Not enough volume to analyze", "Analiz için yeterli hacim yok"), systemImage: "antenna.radiowaves.left.and.right.slash")
                 .font(.headline)
             Text(L10n.text(
-                "The server has not produced a signal for this coin on the selected timeframe yet. Analysis appears as soon as the next scan covers it.",
-                "Sunucu bu coin için seçili zaman diliminde henüz bir sinyal üretmedi. Bir sonraki tarama kapsadığında analiz burada görünecek."
+                "Only the 100 highest-volume coins are analyzed on each candle close. This coin is currently below that line; it joins the scans as soon as its volume carries it back into the top 100.",
+                "Her mum kapanışında sadece hacmi en yüksek 100 coin analiz edilir. Bu coin şu anda bu çizginin altında; hacmi onu yeniden ilk 100'e taşıdığında taramalara dahil olur."
             ))
             .font(.caption).foregroundStyle(TrendysseyColor.secondaryText).lineSpacing(3)
         }
@@ -134,17 +133,7 @@ struct SignalDetailView: View {
     }
 
     @ViewBuilder private var candleChart: some View {
-        if outsideUniverse {
-            ContentUnavailableView(
-                L10n.text("Outside the scan universe", "Tarama evreni dışında"),
-                systemImage: "antenna.radiowaves.left.and.right.slash",
-                description: Text(L10n.text(
-                    "The server does not track candles for this coin yet, so there is no chart or live analysis. Signals for tracked coins are unaffected.",
-                    "Sunucu bu coin için henüz mum takip etmiyor; bu yüzden grafik ve canlı analiz yok. Takip edilen coinlerin sinyalleri bundan etkilenmez."
-                ))
-            )
-            .frame(height: 220)
-        } else if candles.isEmpty && !chartError {
+        if candles.isEmpty && !chartError {
             ProgressView(L10n.text("Loading \(AnalysisTimeframe.selected.title) candles…", "\(AnalysisTimeframe.selected.title) mumları yükleniyor…")).frame(maxWidth: .infinity).frame(height: 220)
         } else if chartError {
             ContentUnavailableView(L10n.text("Chart unavailable", "Grafik yüklenemedi"), systemImage: "chart.xyaxis.line", description: Text(L10n.text("Close and reopen the page to retry.", "Yeniden denemek için sayfayı kapatıp açabilirsin.")))
@@ -309,7 +298,6 @@ struct SignalDetailView: View {
                 interval: AnalysisTimeframe.selected.rawValue,
                 limit: 100
             )
-            outsideUniverse = false
             candles = fetched
             if liveAnalysisAllowed, !fetched.isEmpty {
                 analysis = await ServerAnalysisService.shared.analysis(
