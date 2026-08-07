@@ -18,6 +18,11 @@ actor NotificationService {
             let signal_price: Double
             let signal_time: String
             let breakout_confidence_score: Int
+            let regime_score: Int?
+            let readiness_score: Int?
+            let breakout_quality_score: Int?
+            let confirmation_score: Int?
+            let breakout_triggered: Bool?
             let false_breakout_risk: Int
             let market_activity_score: Int
             let volume_ratio: Double?
@@ -40,7 +45,7 @@ actor NotificationService {
     func notifications() async throws -> [AppNotification] {
         var components = URLComponents(url: SupabaseConfig.projectURL.appending(path: "rest/v1/notifications"), resolvingAgainstBaseURL: false)!
         components.queryItems = [
-            .init(name: "select", value: "id,title,body,status,signal_status,created_at,breakout_signals(id,journey_id,status,signal_price,signal_time,breakout_confidence_score,false_breakout_risk,market_activity_score,volume_ratio,estimated_volume_delta,taker_buy_ratio,explanation,explanation_facts,symbols(symbol,base_asset,icon_url,current_price,price_change_percent_24h,quote_volume_24h))"),
+            .init(name: "select", value: "id,title,body,status,signal_status,created_at,breakout_signals(id,journey_id,status,signal_price,signal_time,breakout_confidence_score,regime_score,readiness_score,breakout_quality_score,confirmation_score,breakout_triggered,false_breakout_risk,market_activity_score,volume_ratio,estimated_volume_delta,taker_buy_ratio,explanation,explanation_facts,symbols(symbol,base_asset,icon_url,current_price,price_change_percent_24h,quote_volume_24h))"),
             .init(name: "notification_type", value: "eq.breakout_signal"),
             .init(name: "order", value: "created_at.desc"),
             .init(name: "limit", value: "100"),
@@ -126,7 +131,12 @@ actor NotificationService {
             price: row.symbols.current_price ?? row.signal_price,
             change24h: row.symbols.price_change_percent_24h ?? 0,
             quoteVolume24h: row.symbols.quote_volume_24h ?? 0,
-            confidence: row.breakout_confidence_score,
+            confidence: row.breakout_quality_score ?? row.breakout_confidence_score,
+            regimeScore: row.regime_score ?? row.explanation_facts?.scoreLayers?.regimeScore ?? 0,
+            readinessScore: row.readiness_score ?? row.explanation_facts?.scoreLayers?.readinessScore ?? 0,
+            breakoutQualityScore: row.breakout_quality_score ?? row.breakout_confidence_score,
+            confirmationScore: row.confirmation_score ?? row.explanation_facts?.scoreLayers?.confirmationScore ?? 0,
+            breakoutTriggered: row.breakout_triggered ?? row.explanation_facts?.scoreLayers?.breakoutTriggered ?? false,
             falseBreakoutRisk: row.false_breakout_risk,
             activityScore: row.market_activity_score,
             volumeRatio: row.volume_ratio ?? 0,

@@ -16,11 +16,35 @@ final class SubscriptionStore {
 
     private(set) var state: State = .loading
     private(set) var monthlyProduct: Product?
+    private(set) var isEligibleForIntroOffer = false
     var message: String?
     private var updatesTask: Task<Void, Never>?
 
     var isSubscribed: Bool { state == .subscribed }
     var priceText: String { monthlyProduct?.displayPrice ?? "$9.99" }
+    var hasFreeTrial: Bool {
+        isEligibleForIntroOffer &&
+            monthlyProduct?.subscription?.introductoryOffer?.paymentMode == .freeTrial
+    }
+    var trialText: String? {
+        guard hasFreeTrial,
+              let period = monthlyProduct?.subscription?.introductoryOffer?.period else { return nil }
+        let value = period.value
+        let unit: String
+        switch period.unit {
+        case .day:
+            unit = L10n.text(value == 1 ? "day" : "days", value == 1 ? "gün" : "gün")
+        case .week:
+            unit = L10n.text(value == 1 ? "week" : "weeks", value == 1 ? "hafta" : "hafta")
+        case .month:
+            unit = L10n.text(value == 1 ? "month" : "months", value == 1 ? "ay" : "ay")
+        case .year:
+            unit = L10n.text(value == 1 ? "year" : "years", value == 1 ? "yıl" : "yıl")
+        @unknown default:
+            return L10n.text("Free trial", "Ücretsiz deneme")
+        }
+        return L10n.text("\(value) \(unit) free", "\(value) \(unit) ücretsiz")
+    }
 
     init() {
         updatesTask = Task { await observeTransactions() }
@@ -31,8 +55,10 @@ final class SubscriptionStore {
         var productLoadFailed = false
         do {
             monthlyProduct = try await Product.products(for: [Self.monthlyProductID]).first
+            isEligibleForIntroOffer = await monthlyProduct?.subscription?.isEligibleForIntroOffer ?? false
         } catch {
             monthlyProduct = nil
+            isEligibleForIntroOffer = false
             productLoadFailed = true
         }
         await refreshEntitlement()

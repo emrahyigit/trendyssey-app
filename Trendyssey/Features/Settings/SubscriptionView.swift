@@ -10,15 +10,19 @@ struct SubscriptionView: View {
                 proMark
                 VStack(spacing: 8) {
                     Text("Trendyssey Pro").font(.largeTitle.bold())
-                    Text(L10n.text("Professional breakout alerts without missing the market.", "Piyasayı kaçırmadan profesyonel kırılım uyarıları."))
+                    Text(L10n.text(
+                        "Filter breakouts for your strategy and follow every move from setup to confirmation.",
+                        "Kırılımları stratejine göre filtrele; hazırlıktan teyide kadar her hareketi takip et."
+                    ))
                         .multilineTextAlignment(.center).foregroundStyle(TrendysseyColor.secondaryText)
                 }
                 SurfaceCard {
                     VStack(alignment: .leading, spacing: 16) {
-                        benefit("bell.badge.fill", L10n.text("Background push alerts", "Arka planda push uyarıları"))
-                        benefit("slider.horizontal.3", L10n.text("Custom signal-stage alerts", "Özel sinyal durumu bildirimleri"))
-                        benefit("star.fill", L10n.text("Favorites or all-market coverage", "Favoriler veya tüm market kapsamı"))
-                        benefit("clock.arrow.circlepath", L10n.text("Seven analysis timeframes", "Yedi analiz zaman dilimi"))
+                        benefit("square.stack.3d.up.fill", L10n.text("Six specialized breakout models", "Altı özel kırılım modeli"))
+                        benefit("clock.arrow.circlepath", L10n.text("Four closed-candle timeframes", "Dört kapanmış mum zaman dilimi"))
+                        benefit("slider.horizontal.3", L10n.text("Score, volume and signal-stage filters", "Puan, hacim ve sinyal aşaması filtreleri"))
+                        benefit("bell.badge.fill", L10n.text("Real-time background push alerts", "Gerçek zamanlı arka plan bildirimleri"))
+                        benefit("chart.xyaxis.line", L10n.text("Breakout scenario simulator", "Kırılım senaryosu simülatörü"))
                     }
                 }
                 if store.isSubscribed {
@@ -26,12 +30,17 @@ struct SubscriptionView: View {
                         .font(.headline).foregroundStyle(TrendysseyColor.positive)
                 } else {
                     VStack(spacing: 6) {
-                        Text(L10n.text("3 days free", "3 gün ücretsiz")).font(.title2.bold())
-                        Text(L10n.text("Then \(store.priceText) per month. Cancel anytime.", "Sonrasında aylık \(store.priceText). İstediğin zaman iptal et."))
+                        Text(store.trialText ?? L10n.text("Trendyssey Pro", "Trendyssey Pro"))
+                            .font(.title2.bold())
+                        Text(store.hasFreeTrial
+                             ? L10n.text("Then \(store.priceText) per month. Cancel anytime.", "Sonrasında aylık \(store.priceText). İstediğin zaman iptal et.")
+                             : L10n.text("\(store.priceText) per month. Cancel anytime.", "Aylık \(store.priceText). İstediğin zaman iptal et."))
                             .font(.subheadline).foregroundStyle(TrendysseyColor.secondaryText)
                     }
                     Button { Task { await store.purchase() } } label: {
-                        Text(L10n.text("Start Free Trial", "Ücretsiz Denemeyi Başlat"))
+                        Text(store.hasFreeTrial
+                             ? L10n.text("Start Free Trial", "Ücretsiz Denemeyi Başlat")
+                             : L10n.text("Start Pro", "Pro'yu Başlat"))
                             .font(.headline).foregroundStyle(.black)
                             .frame(maxWidth: .infinity).padding(.vertical, 15)
                     }
@@ -40,7 +49,7 @@ struct SubscriptionView: View {
                 }
                 Button(L10n.text("Restore Purchases", "Satın Almaları Geri Yükle")) { Task { await store.restore() } }
                 if let message = store.message { Text(message).font(.caption).foregroundStyle(TrendysseyColor.secondaryText) }
-                Text(L10n.text("The free trial and renewal are managed by Apple. Payment is charged to your Apple ID unless cancelled at least 24 hours before renewal.", "Ücretsiz deneme ve yenileme Apple tarafından yönetilir. Yenilemeden en az 24 saat önce iptal edilmezse ödeme Apple ID hesabından alınır."))
+                Text(L10n.text("The offer and renewal are managed by Apple. Payment is charged to your Apple ID unless cancelled at least 24 hours before renewal.", "Teklif ve yenileme Apple tarafından yönetilir. Yenilemeden en az 24 saat önce iptal edilmezse ödeme Apple ID hesabından alınır."))
                     .font(.caption2).foregroundStyle(TrendysseyColor.secondaryText).multilineTextAlignment(.center)
             }
             .padding(20)

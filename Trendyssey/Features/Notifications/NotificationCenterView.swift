@@ -94,10 +94,8 @@ private struct NotificationRow: View {
                     Text(item.createdAt, format: .relative(presentation: .named))
                         .font(.caption2).foregroundStyle(TrendysseyColor.secondaryText).lineLimit(1)
                 }
-                // For a signal alert the server body is the same confidence, risk and
-                // volume numbers the chips below already carry, so it is dropped
-                // rather than shown twice. Notifications without a signal have no
-                // chips, and keep their body.
+                // Signal alerts render the same four score layers as the profile
+                // filters. Notifications without a signal keep the server body.
                 if item.signal == nil {
                     Text(displayBody).font(.caption).foregroundStyle(TrendysseyColor.secondaryText).lineSpacing(3)
                 }
@@ -113,34 +111,38 @@ private struct NotificationRow: View {
         .overlay { RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(TrendysseyColor.border, lineWidth: 1) }
     }
 
-    /// The two numbers that decide whether an alert is worth opening: how strong
-    /// the signal scored and how much money actually trades in the pair.
     private func signalMetrics(_ signal: MarketSignal) -> some View {
-        HStack(spacing: 6) {
+        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 6) {
             metric(
-                L10n.text("Confidence \(signal.confidence)", "Güven \(signal.confidence)"),
-                icon: "gauge.with.needle",
-                tint: strengthColor(signal.confidence)
+                L10n.text("Regime", "Rejim"), value: signal.regimeScore,
+                icon: "waveform.path.ecg", tint: strengthColor(signal.regimeScore)
             )
             metric(
-                L10n.text("Vol. $\(compactVolume(signal.quoteVolume24h))", "Hacim $\(compactVolume(signal.quoteVolume24h))"),
-                icon: "chart.bar.fill",
-                tint: TrendysseyColor.secondaryText
+                L10n.text("Readiness", "Hazırlık"), value: signal.readinessScore,
+                icon: "scope", tint: strengthColor(signal.readinessScore)
+            )
+            metric(
+                L10n.text("Quality", "Kalite"), value: signal.breakoutQualityScore,
+                icon: "gauge.with.needle", tint: strengthColor(signal.breakoutQualityScore)
+            )
+            metric(
+                L10n.text("Confirmation", "Teyit"), value: signal.confirmationScore,
+                icon: "checkmark.seal", tint: strengthColor(signal.confirmationScore)
             )
         }
     }
 
-    private func metric(_ title: String, icon: String, tint: Color) -> some View {
-        Label(title, systemImage: icon)
-            .font(.caption2.weight(.semibold)).monospacedDigit()
-            .foregroundStyle(tint)
-            .lineLimit(1)
-            .padding(.horizontal, 8).padding(.vertical, 5)
-            .background(tint.opacity(0.12), in: Capsule())
-    }
-
-    private func compactVolume(_ value: Double) -> String {
-        value.formatted(.number.notation(.compactName).precision(.significantDigits(3)).locale(L10n.locale))
+    private func metric(_ title: String, value: Int, icon: String, tint: Color) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: icon)
+            Text(title).lineLimit(1).minimumScaleFactor(0.75)
+            Spacer(minLength: 2)
+            Text("\(value)").monospacedDigit()
+        }
+        .font(.caption2.weight(.semibold))
+        .foregroundStyle(tint)
+        .padding(.horizontal, 8).padding(.vertical, 6)
+        .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
     }
 
     private func strengthColor(_ score: Int) -> Color {

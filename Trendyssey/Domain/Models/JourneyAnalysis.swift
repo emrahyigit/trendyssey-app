@@ -10,19 +10,33 @@ enum JourneyDirection: String, Sendable {
 /// same Breakout Journey lifecycle, so switching one out changes how phases are
 /// detected without changing how they are presented.
 enum JourneyModel: String, CaseIterable, Identifiable, Sendable {
-    case emaCross, doubleBottom, doubleTop
+    case emaCross
+    case donchian20, donchian50, horizontalLevel, consolidation
+    case doubleBottom, doubleTop
 
     nonisolated static let storageKey = "preferredJourneyModel"
 
     nonisolated static var selected: JourneyModel {
-        UserDefaults.standard.string(forKey: storageKey).flatMap(JourneyModel.init(rawValue:)) ?? .emaCross
+        guard let raw = UserDefaults.standard.string(forKey: storageKey),
+              let model = JourneyModel(rawValue: raw),
+              selectableCases.contains(model) else { return .donchian20 }
+        return model
     }
+
+    /// EMA Cross remains decodable for existing installs and historical rows,
+    /// but is now a shared trend feature rather than a selectable breakout.
+    /// Double Bottom/Top were retired as standalone models the same way: they
+    /// live on as directional evidence inside every level engine's quality
+    /// score instead of running their own journeys.
+    nonisolated static let selectableCases: [JourneyModel] = [
+        .donchian20, .donchian50, .horizontalLevel, .consolidation,
+    ]
 
     var id: String { rawValue }
 
     nonisolated var direction: JourneyDirection {
         switch self {
-        case .emaCross, .doubleBottom: .bullish
+        case .emaCross, .donchian20, .donchian50, .horizontalLevel, .consolidation, .doubleBottom: .bullish
         case .doubleTop: .bearish
         }
     }
@@ -32,7 +46,11 @@ enum JourneyModel: String, CaseIterable, Identifiable, Sendable {
     /// only for models with a slug here; the others run on the device alone.
     nonisolated var serverSlug: String? {
         switch self {
-        case .emaCross: AnalysisModelSelection.defaultSlug
+        case .emaCross: "gpt-5-6-sol-v1"
+        case .donchian20: "donchian-20-v1"
+        case .donchian50: "donchian-50-v1"
+        case .horizontalLevel: "horizontal-level-v1"
+        case .consolidation: "consolidation-v1"
         case .doubleBottom: "double-bottom-v1"
         case .doubleTop: "double-top-v1"
         }
@@ -44,6 +62,10 @@ enum JourneyModel: String, CaseIterable, Identifiable, Sendable {
     nonisolated var title: String {
         switch self {
         case .emaCross: "EMA Cross 7/25/99"
+        case .donchian20: "Donchian 20"
+        case .donchian50: "Donchian 50"
+        case .horizontalLevel: L10n.text("Horizontal Level", "Yatay Seviye")
+        case .consolidation: L10n.text("Consolidation", "Konsolidasyon")
         case .doubleBottom: L10n.text("Double Bottom", "Çift Dip")
         case .doubleTop: L10n.text("Double Top", "Çift Tepe")
         }
@@ -55,6 +77,26 @@ enum JourneyModel: String, CaseIterable, Identifiable, Sendable {
             L10n.text(
                 "Tracks the journey from EMA 7/25 crossovers with EMA 99 as the trend filter.",
                 "Kırılım sürecini EMA 7/25 kesişimlerinden izler; EMA 99 trend filtresidir."
+            )
+        case .donchian20:
+            L10n.text(
+                "Tracks closes beyond the highest level of the previous 20 completed candles.",
+                "Önceki 20 tamamlanmış mumun en yüksek seviyesinin üzerindeki kapanışları izler."
+            )
+        case .donchian50:
+            L10n.text(
+                "Uses a slower 50-candle price channel for more selective breakouts.",
+                "Daha seçici kırılımlar için 50 mumluk daha yavaş bir fiyat kanalı kullanır."
+            )
+        case .horizontalLevel:
+            L10n.text(
+                "Groups confirmed pivot highs into ATR-sized resistance zones.",
+                "Doğrulanmış pivot tepelerini ATR genişliğinde direnç bölgelerinde kümeler."
+            )
+        case .consolidation:
+            L10n.text(
+                "Finds compact trading ranges and follows the close above their upper boundary.",
+                "Dar işlem aralıklarını bulur ve üst sınırları üzerindeki kapanışı izler."
             )
         case .doubleBottom:
             L10n.text(
@@ -133,6 +175,10 @@ struct JourneyAnalysis: Sendable {
     let confidence: Int
     let factors: [ConfidenceFactor]
     let volumeRatio: Double
+    var scoreLayers: SignalScoreLayers? = nil
+    /// The directional evidence rows that adjusted the quality score, shown as
+    /// a collapsed sub-section rather than among the main factors.
+    var directionalFactors: [ConfidenceFactor] = []
 
     nonisolated var direction: JourneyDirection { model.direction }
 
@@ -181,6 +227,10 @@ enum JourneyAnalyzer {
                 higherTimeframeCandles: higherTimeframeCandles,
                 higherTimeframeTitle: higherTimeframeTitle
             )
+        case .donchian20, .donchian50, .horizontalLevel, .consolidation:
+            // Server-only models: the backend owns detection and all four
+            // scores, so an offline fallback cannot invent a different result.
+            nil
         }
     }
 

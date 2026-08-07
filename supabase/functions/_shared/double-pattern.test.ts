@@ -1,12 +1,18 @@
 /**
- * Parity fixtures shared with the iOS harness. The expected values below were
- * produced by the Swift implementation (DoublePatternAnalyzer); if a change to
- * either side makes these fail, the app and the backend have drifted and users
- * will get pushes that disagree with what the app shows.
+ * Fixtures for the pattern analyzer. The confidence values reflect the server
+ * weights (volume 15, prior trend 5) after the strength-vs-BTC factor moved 10
+ * points into the backend-appended ingredient list; the on-device Swift
+ * analyzer keeps the old weights and is used only for the offline replay.
  *
  * Run with: deno test supabase/functions/_shared/double-pattern.test.ts
  */
-import { analyze, type Candle, type Direction, patterns } from "./double-pattern.ts";
+import {
+  analyze,
+  type Candle,
+  type Direction,
+  patterns,
+  patternScoreLayers,
+} from "./double-pattern.ts";
 
 function ramp(from: number, to: number, count: number): number[] {
   if (count <= 1) return [to];
@@ -51,16 +57,16 @@ const cases: Array<{
     name: "double bottom completes",
     closes: bottomPath,
     direction: "bullish",
-    shapes: "57-80",
+    shapes: "57-81",
     phase: "confirmed",
-    confidence: 76,
+    confidence: 74,
     events: "pre_breakout>breakout_detected>confirmed",
   },
   {
     name: "a genuine retest scores higher than a straight breakout",
     closes: [...bottomPath, ...ramp(89.4, 86.3, 5), ...ramp(87.5, 93, 6)],
     direction: "bullish",
-    shapes: "57-80",
+    shapes: "57-81",
     phase: "confirmed",
     confidence: 83,
     events: "pre_breakout>breakout_detected>confirmed>retest>confirmed",
@@ -76,9 +82,9 @@ const cases: Array<{
       ...ramp(76.6, 88, 10),
     ],
     direction: "bullish",
-    shapes: "57-80,110-133",
+    shapes: "57-81,110-134",
     phase: "confirmed",
-    confidence: 76,
+    confidence: 74,
     events:
       "pre_breakout>breakout_detected>confirmed>retest>failed>pre_breakout>breakout_detected>confirmed",
   },
@@ -92,9 +98,9 @@ const cases: Array<{
       ...ramp(100.4, 90, 10),
     ],
     direction: "bearish",
-    shapes: "57-80",
+    shapes: "57-81",
     phase: "confirmed",
-    confidence: 76,
+    confidence: 74,
     events: "pre_breakout>breakout_detected>confirmed",
   },
   {
@@ -124,8 +130,61 @@ for (const testCase of cases) {
   });
 }
 
+Deno.test("pattern scores answer four independent lifecycle questions", () => {
+  const candles = makeCandles(bottomPath);
+  const complete = analyze(candles, "bullish");
+  const preEvent = complete.events.find((event) => event.status === "pre_breakout")!;
+  const breakoutEvent = complete.events.find((event) => event.status === "breakout_detected")!;
+  const preIndex = candles.findIndex((candle) => candle.closeTime.getTime() === preEvent.time.getTime());
+  const breakoutIndex = candles.findIndex((candle) => candle.closeTime.getTime() === breakoutEvent.time.getTime());
+
+  const preCandles = candles.slice(0, preIndex + 1);
+  const breakoutCandles = candles.slice(0, breakoutIndex + 1);
+  const pre = patternScoreLayers(preCandles, analyze(preCandles, "bullish"), "bullish", 12);
+  const breakout = patternScoreLayers(
+    breakoutCandles,
+    analyze(breakoutCandles, "bullish"),
+    "bullish",
+    12,
+  );
+  const confirmed = patternScoreLayers(candles, complete, "bullish", 12);
+
+  assert(pre.readinessScore > 0, "a formed pattern must have readiness");
+  assertEqual(pre.breakoutQualityScore, 0, "quality before trigger");
+  assertEqual(pre.confirmationScore, 0, "confirmation before trigger");
+  assert(breakout.breakoutQualityScore > 0, "the trigger candle must produce quality");
+  assert(breakout.confirmationScore > 0, "the first held close starts confirmation");
+  assert(
+    confirmed.confirmationScore > breakout.confirmationScore,
+    "post-trigger holding must raise confirmation",
+  );
+});
+
+Deno.test("Double Top treats weakness versus BTC as directional alignment", () => {
+  const closes = [
+    ...ramp(80, 96, 50),
+    ...ramp(96.8, 102, 8),
+    ...ramp(101.4, 94, 13),
+    ...ramp(94.9, 101.7, 10),
+    ...ramp(100.4, 90, 10),
+  ];
+  const candles = makeCandles(closes);
+  const result = analyze(candles, "bearish");
+  const aligned = patternScoreLayers(candles, result, "bearish", 12);
+  const opposed = patternScoreLayers(candles, result, "bearish", 3);
+  assert(aligned.regimeScore > opposed.regimeScore, "bearish alignment must improve regime");
+  assert(
+    aligned.breakoutQualityScore > opposed.breakoutQualityScore,
+    "bearish alignment must improve quality",
+  );
+});
+
 function assertEqual(actual: unknown, expected: unknown, label: string): void {
   if (actual !== expected) {
     throw new Error(`${label}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
   }
+}
+
+function assert(condition: boolean, label: string): void {
+  if (!condition) throw new Error(label);
 }

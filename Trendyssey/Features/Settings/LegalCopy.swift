@@ -21,21 +21,21 @@ enum LegalCopy {
     static var methodology: LegalDocument {
         LegalDocument(
             summary: L10n.text(
-                "How Trendyssey turns Binance Spot candles into a breakout journey and a single confidence score — and what that score does not claim to be.",
-                "Trendyssey'in Binance Spot mumlarını nasıl bir kırılım sürecine ve tek bir güven puanına dönüştürdüğü — ve bu puanın ne iddia etmediği."
+                "How Trendyssey turns Binance Spot candles into a breakout journey and four separate scores — and what those scores do not claim to be.",
+                "Trendyssey'in Binance Spot mumlarını nasıl bir kırılım sürecine ve birbirinden ayrı dört puana dönüştürdüğü — ve bu puanların ne iddia etmediği."
             ),
             sections: [
                 .init(
                     heading: L10n.text("Where the data comes from", "Veri nereden geliyor"),
                     paragraphs: [
                         L10n.text(
-                            "Trendyssey analyses publicly available Binance Spot market data. Closed candles are collected once on the server and every screen — charts, scenarios and alerts — reads that same shared history; only the still-forming candle is drawn live. The same models run on both sides, so a chart you open agrees with the alert that brought you there.",
-                            "Trendyssey, Binance Spot üzerindeki herkese açık piyasa verilerini analiz eder. Kapanmış mumlar sunucuda bir kez toplanır ve grafikler, senaryolar ve bildirimler dahil her ekran aynı ortak geçmişi okur; yalnızca oluşmakta olan mum canlı çizilir. Aynı modeller her iki tarafta da çalışır; açtığınız grafik, sizi oraya getiren bildirimle tutarlıdır."
+                            "Trendyssey analyses publicly available Binance Spot market data. Server models use completed candles only; the app reads the stored signal and score instead of producing a second competing result.",
+                            "Trendyssey, Binance Spot üzerindeki herkese açık piyasa verilerini analiz eder. Sunucu modelleri yalnızca tamamlanmış mumları kullanır; uygulama ikinci ve çelişebilecek bir sonuç üretmek yerine kaydedilmiş sinyal ile puanları okur."
                         )
                     ]
                 ),
                 .init(
-                    heading: L10n.text("The three models", "Üç model"),
+                    heading: L10n.text("The six breakout models", "Altı kırılım modeli"),
                     paragraphs: [
                         L10n.text(
                             "You pick one model in Profile. It drives every journey, score and chart overlay in the app.",
@@ -44,8 +44,16 @@ enum LegalCopy {
                     ],
                     bullets: [
                         L10n.text(
-                            "EMA Cross 7/25/99 — built on Binance's default moving averages. EMA 7 crossing above EMA 25 opens a journey; EMA 99 is the long-term trend filter.",
-                            "EMA Cross 7/25/99 — Binance'in varsayılan hareketli ortalamaları üzerine kuruludur. EMA 7'nin EMA 25'i yukarı kesmesi bir süreç başlatır; EMA 99 uzun vadeli trend filtresidir."
+                            "Donchian 20 and Donchian 50 — objective price-channel breakouts over two different completed-candle windows.",
+                            "Donchian 20 ve Donchian 50 — iki farklı tamamlanmış mum penceresindeki nesnel fiyat kanalı kırılımlarıdır."
+                        ),
+                        L10n.text(
+                            "Horizontal Level — groups confirmed pivot highs into ATR-sized resistance zones.",
+                            "Yatay Seviye — doğrulanmış pivot tepelerini ATR genişliğinde direnç bölgelerinde kümeler."
+                        ),
+                        L10n.text(
+                            "Consolidation — follows volatility expansion above the upper boundary of a compact range.",
+                            "Konsolidasyon — dar bir aralığın üst sınırı üzerindeki volatilite genişlemesini izler."
                         ),
                         L10n.text(
                             "Double Bottom — finds two lows at a similar level and follows the break above the neckline between them. A rising move.",
@@ -84,19 +92,19 @@ enum LegalCopy {
                     ]
                 ),
                 .init(
-                    heading: L10n.text("The confidence score", "Güven puanı"),
+                    heading: L10n.text("The four scores", "Dört puan"),
                     paragraphs: [
                         L10n.text(
-                            "Each coin gets a single 0–100 score. Every ingredient is shown with its own points and a plain-language reason, so the number is fully auditable rather than a black box.",
-                            "Her coin 0–100 arası tek bir puan alır. Her bileşen kendi puanı ve sade bir gerekçeyle gösterilir; böylece sayı bir kara kutu değil, tamamen denetlenebilir bir sonuçtur."
+                            "Each signal gets four 0–100 scores: regime suitability, breakout readiness, breakout quality and post-breakout confirmation. A trigger is a closed-candle fact, not a fifth score.",
+                            "Her sinyal 0–100 arası dört puan alır: rejim uygunluğu, kırılım hazırlığı, kırılım kalitesi ve kırılım sonrası teyit. Tetik, kapanmış muma dayanan bir olgudur; beşinci bir puan değildir."
                         ),
                         L10n.text(
-                            "EMA Cross weighs trend alignment (20), crossover freshness (15), retest confirmation (15), volume support (20), long-term trend (10), momentum (10) and higher-timeframe agreement (10). The chart patterns weigh pattern symmetry (20), pattern depth (15), break freshness (15), volume support (20), retest confirmation (15), the strength of the trend being reversed (10) and the same higher-timeframe agreement (10).",
-                            "EMA Cross şunları tartar: trend dizilimi (20), kesişim tazeliği (15), retest onayı (15), hacim desteği (20), uzun vadeli trend (10), momentum (10) ve üst dilim uyumu (10). Desen modelleri ise formasyon simetrisi (20), formasyon derinliği (15), kırılım tazeliği (15), hacim desteği (20), retest onayı (15), dönülen trendin gücü (10) ve aynı üst dilim uyumunu (10) tartar."
+                            "Regime reads EMA structure, slopes and ADX. Readiness reads proximity, compression and level tests. Breakout quality reads the closed-candle clearance, relative volume, body, wick, level quality, trend and BTC alignment. Confirmation reads whether price held or retested the broken level.",
+                            "Rejim; EMA yapısını, eğimleri ve ADX'i okur. Hazırlık; seviyeye yakınlığı, sıkışmayı ve seviye testlerini okur. Kırılım kalitesi; kapanış mesafesini, göreli hacmi, gövdeyi, fitili, seviye kalitesini, trendi ve BTC uyumunu okur. Teyit ise fiyatın kırılan seviyeyi koruyup korumadığını veya yeniden test edip etmediğini okur."
                         ),
                         L10n.text(
-                            "The score is a deterministic summary of current market structure. It is not a probability, a forecast or a guarantee.",
-                            "Puan, mevcut piyasa yapısının deterministik bir özetidir. Olasılık, tahmin veya garanti değildir."
+                            "These scores are deterministic summaries of current market structure. None is a calibrated success probability, forecast or guarantee.",
+                            "Bu puanlar mevcut piyasa yapısının deterministik özetleridir. Hiçbiri kalibre edilmiş başarı olasılığı, tahmin veya garanti değildir."
                         )
                     ]
                 ),
@@ -104,8 +112,8 @@ enum LegalCopy {
                     heading: L10n.text("Measuring what happened", "Ne olduğunun ölçümü"),
                     paragraphs: [
                         L10n.text(
-                            "After a breakout is detected, Trendyssey records the return, the maximum favourable excursion and the maximum adverse excursion over defined candle horizons. Model comparison replays all three models over the same coins, the same candles and the same horizon, and scores a call as a win when price closed the way the model expected.",
-                            "Kırılım algılandıktan sonra Trendyssey; tanımlı mum ufuklarında gerçekleşen getiriyi, maksimum olumlu hareketi (MFE) ve maksimum olumsuz hareketi (MAE) kaydeder. Model karşılaştırma ekranı üç modeli de aynı coinler, aynı mumlar ve aynı ufuk üzerinde yeniden oynatır; fiyat modelin beklediği yönde kapandıysa o çağrıyı kazanç sayar."
+                            "After a breakout is detected, Trendyssey records return, maximum favourable excursion and maximum adverse excursion over defined candle horizons. Model variants must be compared over the same coins, candles, horizons and market regimes.",
+                            "Kırılım algılandıktan sonra Trendyssey; tanımlı mum ufuklarında getiriyi, maksimum olumlu hareketi (MFE) ve maksimum olumsuz hareketi (MAE) kaydeder. Model varyantları aynı coinler, mumlar, ufuklar ve piyasa rejimleri üzerinde karşılaştırılmalıdır."
                         ),
                         L10n.text(
                             "Read those win rates against 50%, which is what a coin flip would produce. A model only has an edge above that line, and a rate resting on a handful of measurements is not yet evidence of anything.",

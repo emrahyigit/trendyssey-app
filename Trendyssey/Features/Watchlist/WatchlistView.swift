@@ -5,7 +5,7 @@ struct WatchlistView: View {
     @State private var liveSignals: [MarketSignal] = []
     @State private var selectedSignal: MarketSignal?
     @AppStorage("preferredTimeframe") private var preferredTimeframe = "15m"
-    @AppStorage(JourneyModel.storageKey) private var journeyModel = JourneyModel.emaCross.rawValue
+    @AppStorage(JourneyModel.storageKey) private var journeyModel = JourneyModel.donchian20.rawValue
 
     private var followedSignals: [MarketSignal] { liveSignals.filter { environment.watchlist.contains($0.symbol) } }
 

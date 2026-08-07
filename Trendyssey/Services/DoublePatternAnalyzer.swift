@@ -62,6 +62,14 @@ enum DoublePatternAnalyzer {
         let model: JourneyModel = direction == .bullish ? .doubleBottom : .doubleTop
         let emaLong = EMAJourneyAnalyzer.ema(candles.map(\.close), period: EMAJourneyAnalyzer.longPeriod)
         let trendSeries = [JourneySeries(key: "ema99", title: "EMA 99", values: emaLong)]
+        let confluence = EMAJourneyAnalyzer.confluenceFactor(
+            direction: direction,
+            higherTimeframeCandles: higherTimeframeCandles,
+            higherTimeframeTitle: higherTimeframeTitle
+        )
+        let marketAlignment = confluence.map { factor in
+            factor.maxScore > 0 ? Double(factor.score) / Double(factor.maxScore) : 0.5
+        } ?? 0.5
 
         let history = patterns(candles: candles, direction: direction)
         guard let pattern = history.last else {
@@ -89,7 +97,15 @@ enum DoublePatternAnalyzer {
                 currentPhase: .watching,
                 confidence: 0,
                 factors: factors,
-                volumeRatio: volumeRatio
+                volumeRatio: volumeRatio,
+                scoreLayers: SignalScoreLayers(
+                    regimeScore: Int((marketAlignment * 100).rounded()),
+                    readinessScore: 0,
+                    breakoutQualityScore: 0,
+                    confirmationScore: 0,
+                    breakoutTriggered: false,
+                    scoringVersion: "breakout-scores-v2-pattern"
+                )
             )
         }
 
@@ -110,12 +126,22 @@ enum DoublePatternAnalyzer {
             retestHeld: retestHeld,
             volumeRatio: volumeRatio
         )
-        if let confluence = EMAJourneyAnalyzer.confluenceFactor(
-            direction: direction,
-            higherTimeframeCandles: higherTimeframeCandles,
-            higherTimeframeTitle: higherTimeframeTitle
-        ) {
+        if let confluence {
             factors.append(confluence)
+        }
+        let scoreLayers = patternScoreLayers(
+            candles: candles,
+            pattern: pattern,
+            direction: direction,
+            phase: phase,
+            walk: current,
+            factors: factors,
+            marketAlignment: marketAlignment
+        )
+        let stageScore: Int = switch phase {
+        case .watching, .preBreakout: scoreLayers.readinessScore
+        case .breakoutDetected, .failed, .expired: scoreLayers.breakoutQualityScore
+        case .confirmed, .retest: scoreLayers.confirmationScore
         }
 
         return JourneyAnalysis(
@@ -137,9 +163,121 @@ enum DoublePatternAnalyzer {
             ],
             events: events,
             currentPhase: phase,
-            confidence: JourneyAnalyzer.confidence(from: factors),
+            confidence: stageScore,
             factors: factors,
-            volumeRatio: volumeRatio
+            volumeRatio: volumeRatio,
+            scoreLayers: scoreLayers
+        )
+    }
+
+    /// Mirrors the server's v2 pattern layers. Pattern structure and proximity
+    /// form readiness; the actual neckline-clearing candle forms quality; only
+    /// candles after that trigger are allowed to form confirmation.
+    private nonisolated static func patternScoreLayers(
+        candles: [PriceCandle],
+        pattern: Pattern,
+        direction: JourneyDirection,
+        phase: SignalStatus,
+        walk: JourneyWalk,
+        factors: [ConfidenceFactor],
+        marketAlignment: Double
+    ) -> SignalScoreLayers {
+        func clamp(_ value: Double) -> Double { min(1, max(0, value)) }
+        func normalized(_ key: String) -> Double {
+            guard let factor = factors.first(where: { $0.key == key }), factor.maxScore > 0 else { return 0 }
+            return clamp(Double(factor.score) / Double(factor.maxScore))
+        }
+
+        let symmetry = normalized("symmetry")
+        let depth = normalized("depth")
+        let context = normalized("context")
+        let currentVolume = normalized("volume")
+        let alignment = clamp(marketAlignment)
+        let current = candles[candles.count - 1]
+        let signedDistance = direction == .bullish
+            ? (pattern.neckline - current.close) / pattern.neckline
+            : (current.close - pattern.neckline) / pattern.neckline
+        let proximity = clamp(1 - max(0, signedDistance) / approachBand)
+        let regimeScore = Int((100 * (0.55 * context + 0.45 * alignment)).rounded())
+        let readinessScore = Int((100 * (
+            0.30 * symmetry + 0.25 * depth + 0.20 * context +
+            0.15 * proximity + 0.10 * currentVolume
+        )).rounded())
+
+        let historicalBreakoutIndex = walk.events
+            .first(where: { $0.status == .breakoutDetected })
+            .flatMap { event in candles.firstIndex(where: { $0.closeTime == event.time }) }
+        guard let breakoutIndex = walk.breakoutIndex ?? historicalBreakoutIndex,
+              phase != .watching, phase != .preBreakout else {
+            return SignalScoreLayers(
+                regimeScore: regimeScore,
+                readinessScore: readinessScore,
+                breakoutQualityScore: 0,
+                confirmationScore: 0,
+                breakoutTriggered: false,
+                scoringVersion: "breakout-scores-v2-pattern"
+            )
+        }
+
+        let breakoutCandle = candles[breakoutIndex]
+        let breakoutRange = max(breakoutCandle.high - breakoutCandle.low, .leastNonzeroMagnitude)
+        let directionalBody = clamp(
+            (direction == .bullish
+                ? breakoutCandle.close - breakoutCandle.open
+                : breakoutCandle.open - breakoutCandle.close) / breakoutRange
+        )
+        let clearance = direction == .bullish
+            ? (breakoutCandle.close - pattern.neckline) / pattern.neckline
+            : (pattern.neckline - breakoutCandle.close) / pattern.neckline
+        let clearanceQuality = clamp(clearance / max(pattern.depth * 0.25, breakoutBuffer))
+        let breakoutVolumeRatio = JourneyAnalyzer.latestVolumeRatio(
+            candles: Array(candles.prefix(breakoutIndex + 1))
+        )
+        let breakoutVolume = clamp((breakoutVolumeRatio - 0.70) / 1.30)
+        let qualityScore = Int((100 * (
+            0.20 * symmetry + 0.15 * depth + 0.25 * breakoutVolume +
+            0.20 * directionalBody + 0.10 * clearanceQuality + 0.10 * alignment
+        )).rounded())
+
+        guard phase != .failed else {
+            return SignalScoreLayers(
+                regimeScore: regimeScore,
+                readinessScore: readinessScore,
+                breakoutQualityScore: qualityScore,
+                confirmationScore: 0,
+                breakoutTriggered: false,
+                scoringVersion: "breakout-scores-v2-pattern"
+            )
+        }
+
+        let recent = candles[max(breakoutIndex, candles.count - 3)...]
+        let heldCloses = Double(recent.filter { candle in
+            direction == .bullish ? candle.close > pattern.neckline : candle.close < pattern.neckline
+        }.count) / Double(max(recent.count, 1))
+        let levelHeld = direction == .bullish
+            ? current.close > pattern.neckline
+            : current.close < pattern.neckline
+        let retestEvidence = walk.retestHeld ? 1.0 : phase == .retest ? 0.5 : 0
+        let phaseProgress = phase == .confirmed ? 1.0 : phase == .retest ? 0.5 : 0.25
+        let continuation = clamp(
+            (direction == .bullish
+                ? current.close - breakoutCandle.close
+                : breakoutCandle.close - current.close) /
+                (max(breakoutCandle.close, .leastNonzeroMagnitude) * max(pattern.depth, minDepth))
+        )
+        let confirmationScore = Int((100 * (
+            0.25 * (levelHeld ? 1 : 0) + 0.25 * heldCloses +
+            0.25 * retestEvidence + 0.15 * phaseProgress + 0.10 * continuation
+        )).rounded())
+        let breakoutTriggered = phase == .breakoutDetected || phase == .retest || phase == .confirmed
+
+        return SignalScoreLayers(
+            regimeScore: regimeScore,
+            readinessScore: readinessScore,
+            breakoutQualityScore: qualityScore,
+            confirmationScore: confirmationScore,
+            breakoutTriggered: breakoutTriggered,
+            scoringVersion: "breakout-scores-v2-pattern"
         )
     }
 
@@ -169,12 +307,14 @@ enum DoublePatternAnalyzer {
     }
 
     /// Every pattern in the candle history, oldest first and non-overlapping.
-    /// Overlapping candidates are collapsed to the most symmetric one so a single
-    /// shape is not counted several times.
+    /// Overlap is resolved from the newest shape backwards so the pattern closest
+    /// to the present always survives; an older candidate only joins when it
+    /// finished before the accepted newer one started. Candidates sharing a
+    /// second pivot collapse to the most symmetric one.
     nonisolated static func patterns(candles: [PriceCandle], direction: JourneyDirection) -> [Pattern] {
         let candidates = candidatePatterns(candles: candles, direction: direction)
             .sorted {
-                if $0.secondIndex != $1.secondIndex { return $0.secondIndex < $1.secondIndex }
+                if $0.secondIndex != $1.secondIndex { return $0.secondIndex > $1.secondIndex }
                 return $0.difference < $1.difference
             }
         var accepted: [Pattern] = []
@@ -183,11 +323,9 @@ enum DoublePatternAnalyzer {
                 accepted.append(candidate)
                 continue
             }
-            // A new shape must start after the previous one finished, otherwise it
-            // is the same swing described with slightly different pivots.
-            if candidate.firstIndex >= previous.secondIndex { accepted.append(candidate) }
+            if candidate.secondIndex <= previous.firstIndex { accepted.append(candidate) }
         }
-        return accepted
+        return accepted.reversed()
     }
 
     private nonisolated static func candidatePatterns(candles: [PriceCandle], direction: JourneyDirection) -> [Pattern] {

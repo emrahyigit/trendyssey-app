@@ -180,21 +180,23 @@ function candidatePatterns(candles: Candle[], direction: Direction): DoublePatte
 
 /**
  * Every pattern in the candle history, oldest first and non-overlapping.
- * Overlapping candidates collapse to the most symmetric one so a single shape is
- * not counted several times.
+ * Overlap is resolved from the newest shape backwards so the pattern closest
+ * to the present always survives; an older candidate only joins when it
+ * finished before the accepted newer one started. Candidates sharing a second
+ * pivot collapse to the most symmetric one.
  */
 export function patterns(candles: Candle[], direction: Direction): DoublePattern[] {
   const candidates = candidatePatterns(candles, direction).sort((x, y) =>
     x.secondIndex !== y.secondIndex
-      ? x.secondIndex - y.secondIndex
+      ? y.secondIndex - x.secondIndex
       : x.difference - y.difference
   );
   const accepted: DoublePattern[] = [];
   for (const candidate of candidates) {
     const previous = accepted[accepted.length - 1];
-    if (!previous || candidate.firstIndex >= previous.secondIndex) accepted.push(candidate);
+    if (!previous || candidate.secondIndex <= previous.firstIndex) accepted.push(candidate);
   }
-  return accepted;
+  return accepted.reverse();
 }
 
 /**
@@ -329,6 +331,15 @@ export interface AnalysisResult {
   volumeRatio: number;
 }
 
+export interface PatternScoreLayers {
+  regimeScore: number;
+  readinessScore: number;
+  breakoutQualityScore: number;
+  confirmationScore: number;
+  breakoutTriggered: boolean;
+  scoringVersion: string;
+}
+
 /** Volume of the last closed candle against the 20-candle average. */
 export function latestVolumeRatio(candles: Candle[]): number {
   if (candles.length < 2) return 0;
@@ -347,9 +358,10 @@ function volumeScore(ratio: number, maxScore = 20): number {
 }
 
 /**
- * The same seven ingredients the app scores, normalized to 0-100. The
- * higher-timeframe confluence factor is left to the caller: it needs a second
- * candle series, and the backend already fetches those per timeframe.
+ * The pattern's own scored ingredients, normalized to 0-100 by `confidence`.
+ * The strength-vs-BTC factor is left to the caller: it needs the BTC candle
+ * series, which the backend fetches once per scan run and appends as a
+ * `btcStrength` factor before normalizing.
  */
 export function confidenceFactors(
   candles: Candle[],
@@ -363,15 +375,15 @@ export function confidenceFactors(
   const lastIndex = candles.length - 1;
   const factors: ConfidenceFactor[] = [];
 
-  // 1. Pivot symmetry (max 20)
+  // 1. Pivot symmetry (max 15)
   const symmetry = pattern.difference < 0.005
-    ? 20
-    : pattern.difference < 0.01
     ? 15
-    : pattern.difference < 0.015
+    : pattern.difference < 0.01
     ? 11
-    : 7;
-  factors.push({ key: "symmetry", score: symmetry, maxScore: 20 });
+    : pattern.difference < 0.015
+    ? 8
+    : 5;
+  factors.push({ key: "symmetry", score: symmetry, maxScore: 15 });
 
   // 2. Pattern depth (max 15)
   const depth = pattern.depth >= 0.06 ? 15 : pattern.depth >= 0.035 ? 12 : pattern.depth >= 0.02 ? 8 : 5;
@@ -387,8 +399,8 @@ export function confidenceFactors(
   }
   factors.push({ key: "breakout", score: breakout, maxScore: 15 });
 
-  // 4. Volume support (max 20)
-  factors.push({ key: "volume", score: volumeScore(volumeRatio), maxScore: 20 });
+  // 4. Volume support (max 15)
+  factors.push({ key: "volume", score: volumeScore(volumeRatio, 15), maxScore: 15 });
 
   // 5. Retest confirmation (max 15)
   const retest = retestHeld
@@ -400,7 +412,7 @@ export function confidenceFactors(
     : 0;
   factors.push({ key: "retest", score: retest, maxScore: 15 });
 
-  // 6. The trend being reversed (max 10)
+  // 6. The trend being reversed (max 5)
   const contextStart = Math.max(0, pattern.firstIndex - CONTEXT_WINDOW);
   let priorMove = 0;
   if (contextStart < pattern.firstIndex) {
@@ -413,8 +425,8 @@ export function confidenceFactors(
       priorMove = trough > 0 ? (pattern.firstPrice - trough) / trough : 0;
     }
   }
-  const context = priorMove >= 0.1 ? 10 : priorMove >= 0.05 ? 7 : priorMove >= 0.02 ? 4 : 1;
-  factors.push({ key: "context", score: context, maxScore: 10 });
+  const context = priorMove >= 0.1 ? 5 : priorMove >= 0.05 ? 4 : priorMove >= 0.02 ? 2 : 1;
+  factors.push({ key: "context", score: context, maxScore: 5 });
 
   return factors;
 }
@@ -424,6 +436,140 @@ export function confidence(factors: ConfidenceFactor[]): number {
   const achieved = factors.reduce((sum, f) => sum + f.score, 0);
   const achievable = factors.reduce((sum, f) => sum + f.maxScore, 0);
   return Math.min(100, Math.max(0, Math.round((achieved * 100) / Math.max(achievable, 1))));
+}
+
+const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
+
+function normalizedFactor(factors: ConfidenceFactor[], key: string): number {
+  const factor = factors.find((item) => item.key === key);
+  return factor && factor.maxScore > 0 ? clamp01(factor.score / factor.maxScore) : 0;
+}
+
+function effectiveBreakoutIndex(candles: Candle[], walk: JourneyWalk | undefined): number | null {
+  if (!walk) return null;
+  if (walk.breakoutIndex !== null) return walk.breakoutIndex;
+  const event = walk.events.find((item) => item.status === "breakout_detected");
+  if (!event) return null;
+  const index = candles.findIndex((candle) => candle.closeTime.getTime() === event.time.getTime());
+  return index >= 0 ? index : null;
+}
+
+/**
+ * Four independent questions for a double pattern. Structure/proximity belongs
+ * to readiness, the actual neckline-clearing candle belongs to quality, and
+ * only behaviour after that candle belongs to confirmation. This prevents the
+ * old all-purpose confidence score from leaking into every layer.
+ */
+export function patternScoreLayers(
+  candles: Candle[],
+  result: AnalysisResult,
+  direction: Direction,
+  directionalMarketScore: number,
+): PatternScoreLayers {
+  const marketAlignment = clamp01(directionalMarketScore / 15);
+  const activeTrigger = result.phase === "breakout_detected" || result.phase === "retest" ||
+    result.phase === "confirmed";
+  const empty = {
+    regimeScore: Math.round(marketAlignment * 100),
+    readinessScore: 0,
+    breakoutQualityScore: 0,
+    confirmationScore: 0,
+    breakoutTriggered: activeTrigger,
+    scoringVersion: "breakout-scores-v2-pattern",
+  };
+  const pattern = result.pattern;
+  if (!pattern || candles.length === 0) return empty;
+
+  const symmetry = normalizedFactor(result.factors, "symmetry");
+  const depth = normalizedFactor(result.factors, "depth");
+  const context = normalizedFactor(result.factors, "context");
+  const currentVolume = normalizedFactor(result.factors, "volume");
+  const current = candles.at(-1)!;
+  const signedDistance = direction === "bullish"
+    ? (pattern.neckline - current.close) / pattern.neckline
+    : (current.close - pattern.neckline) / pattern.neckline;
+  const proximity = clamp01(1 - Math.max(0, signedDistance) / APPROACH_BAND);
+
+  const regimeScore = Math.round(100 * (0.55 * context + 0.45 * marketAlignment));
+  const readinessScore = Math.round(100 * (
+    0.30 * symmetry + 0.25 * depth + 0.20 * context +
+    0.15 * proximity + 0.10 * currentVolume
+  ));
+
+  const walk = result.walks.at(-1);
+  const breakoutIndex = effectiveBreakoutIndex(candles, walk);
+  if (breakoutIndex === null || result.phase === "watching" || result.phase === "pre_breakout") {
+    return { ...empty, regimeScore, readinessScore };
+  }
+
+  const breakoutCandle = candles[breakoutIndex];
+  const breakoutRange = Math.max(breakoutCandle.high - breakoutCandle.low, Number.EPSILON);
+  const directionalBody = clamp01(
+    (direction === "bullish"
+      ? breakoutCandle.close - breakoutCandle.open
+      : breakoutCandle.open - breakoutCandle.close) / breakoutRange,
+  );
+  const clearance = direction === "bullish"
+    ? (breakoutCandle.close - pattern.neckline) / pattern.neckline
+    : (pattern.neckline - breakoutCandle.close) / pattern.neckline;
+  const clearanceQuality = clamp01(
+    clearance / Math.max(pattern.depth * 0.25, BREAKOUT_BUFFER),
+  );
+  const breakoutVolumeRatio = latestVolumeRatio(candles.slice(0, breakoutIndex + 1));
+  const breakoutVolume = clamp01((breakoutVolumeRatio - 0.70) / 1.30);
+  const breakoutQualityScore = Math.round(100 * (
+    0.20 * symmetry + 0.15 * depth + 0.25 * breakoutVolume +
+    0.20 * directionalBody + 0.10 * clearanceQuality + 0.10 * marketAlignment
+  ));
+
+  if (result.phase === "failed") {
+    return {
+      regimeScore,
+      readinessScore,
+      breakoutQualityScore,
+      confirmationScore: 0,
+      breakoutTriggered: false,
+      scoringVersion: "breakout-scores-v2-pattern",
+    };
+  }
+
+  const recent = candles.slice(Math.max(breakoutIndex, candles.length - 3));
+  const heldCloses = recent.filter((candle) =>
+    direction === "bullish" ? candle.close > pattern.neckline : candle.close < pattern.neckline
+  ).length / Math.max(recent.length, 1);
+  const levelHeld = direction === "bullish"
+    ? current.close > pattern.neckline
+    : current.close < pattern.neckline;
+  const retestEvidence = walk?.retestHeld
+    ? 1
+    : result.phase === "retest"
+    ? 0.5
+    : 0;
+  const phaseProgress = result.phase === "confirmed"
+    ? 1
+    : result.phase === "retest"
+    ? 0.5
+    : 0.25;
+  const breakoutClose = Math.max(breakoutCandle.close, Number.EPSILON);
+  const continuation = clamp01(
+    (direction === "bullish"
+      ? current.close - breakoutCandle.close
+      : breakoutCandle.close - current.close) /
+      (breakoutClose * Math.max(pattern.depth, MIN_DEPTH)),
+  );
+  const confirmationScore = Math.round(100 * (
+    0.25 * (levelHeld ? 1 : 0) + 0.25 * heldCloses +
+    0.25 * retestEvidence + 0.15 * phaseProgress + 0.10 * continuation
+  ));
+
+  return {
+    regimeScore,
+    readinessScore,
+    breakoutQualityScore,
+    confirmationScore,
+    breakoutTriggered: activeTrigger,
+    scoringVersion: "breakout-scores-v2-pattern",
+  };
 }
 
 /**

@@ -49,9 +49,15 @@ actor UserSyncService {
         let notificationsEnabled: Bool
         let preferredTimeframe: String
         let analysisModelSlug: String
+        /// Legacy alias retained while older sync-user deployments roll over.
         let minimumScore: Int
+        let minimumRegimeScore: Int
+        let minimumReadinessScore: Int
+        let minimumBreakoutQualityScore: Int
+        let minimumConfirmationScore: Int
         let maximumRisk: Int
         let minimumVolumeRatio: Double
+        let minimumQuoteVolume24h: Double
         let statuses: [String]
         let alertScope: String
         let preferredLanguage: String
@@ -64,7 +70,7 @@ actor UserSyncService {
     }
 
     private struct SubscriptionEntitlement: Decodable {
-        let status: String
+        let is_active: Bool
         let expires_at: String
     }
 
@@ -85,13 +91,19 @@ actor UserSyncService {
         let statuses = (defaults.string(forKey: "notificationStatuses") ?? "preBreakout,breakoutDetected,confirmed,retest,failed,expired")
             .split(separator: ",")
             .compactMap { Self.databaseStatus(String($0)) }
+        let minimumQuality = defaults.integer(forKey: "notificationMinimumScore")
         let preferences = Preferences(
             notificationsEnabled: defaults.bool(forKey: "notificationsEnabled"),
             preferredTimeframe: defaults.string(forKey: "preferredTimeframe") ?? "15m",
             analysisModelSlug: AnalysisModelSelection.selectedSlug,
-            minimumScore: defaults.integer(forKey: "notificationMinimumScore"),
+            minimumScore: minimumQuality,
+            minimumRegimeScore: defaults.integer(forKey: "notificationMinimumRegimeScore"),
+            minimumReadinessScore: defaults.integer(forKey: "notificationMinimumReadinessScore"),
+            minimumBreakoutQualityScore: minimumQuality,
+            minimumConfirmationScore: defaults.integer(forKey: "notificationMinimumConfirmationScore"),
             maximumRisk: 100,
             minimumVolumeRatio: 0.0,
+            minimumQuoteVolume24h: Double(defaults.integer(forKey: "notificationMinimumVolumeMillions")) * 1_000_000,
             statuses: statuses,
             alertScope: defaults.string(forKey: "notificationScope") ?? "favorites",
             preferredLanguage: defaults.string(forKey: "appLanguage") ?? AppLanguage.default.rawValue
@@ -203,7 +215,7 @@ actor UserSyncService {
                 resolvingAgainstBaseURL: false
             )!
             components.queryItems = [
-                .init(name: "select", value: "status,expires_at"),
+                .init(name: "select", value: "is_active,expires_at"),
                 .init(name: "limit", value: "1"),
             ]
             var request = URLRequest(url: components.url!)
@@ -215,7 +227,7 @@ actor UserSyncService {
                 return false
             }
             guard let entitlement = try JSONDecoder().decode([SubscriptionEntitlement].self, from: data).first,
-                  ["active", "grace_period"].contains(entitlement.status),
+                  entitlement.is_active,
                   let expiry = Self.entitlementDate(entitlement.expires_at) else {
                 return false
             }

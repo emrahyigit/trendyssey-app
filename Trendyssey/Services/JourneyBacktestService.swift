@@ -37,6 +37,7 @@ actor JourneyBacktestService {
     func scenarioEntries(
         model: JourneyModel,
         symbols: [String],
+        volumeBySymbol: [String: Double],
         timeframe: AnalysisTimeframe,
         lookbackHours: Double,
         status: SignalStatus
@@ -58,20 +59,32 @@ actor JourneyBacktestService {
                 where event.status == status && event.time >= since && event.price > 0 {
                     guard let index = indexByCloseTime[event.time], index + 1 < analysis.candles.count else { continue }
                     let observed = Array(analysis.candles[(index + 1)...])
+                    let fallbackConfirmation = switch event.status {
+                    case .confirmed: 100
+                    case .retest: 60
+                    case .breakoutDetected: 35
+                    default: 0
+                    }
                     entries.append(
                         BreakoutScenarioEntry(
                             id: UUID(),
                             symbol: symbol,
                             status: status,
+                            direction: model.direction,
                             // The score describes the symbol's current journey, not
                             // this historical event; it is the closest stand-in the
                             // device has for the score the backend would have stored.
-                            confidenceScore: analysis.confidence,
+                            regimeScore: analysis.scoreLayers?.regimeScore ?? analysis.confidence,
+                            readinessScore: analysis.scoreLayers?.readinessScore ?? analysis.confidence,
+                            breakoutQualityScore: analysis.scoreLayers?.breakoutQualityScore ?? analysis.confidence,
+                            confirmationScore: analysis.scoreLayers?.confirmationScore ?? fallbackConfirmation,
                             falseBreakoutRisk: max(0, 100 - analysis.confidence),
                             volumeRatio: analysis.volumeRatio,
+                            quoteVolume24h: volumeBySymbol[symbol] ?? 0,
                             entryPrice: event.price,
                             latestPrice: observed.last?.close ?? event.price,
                             maximumObservedPrice: observed.map(\.high).max() ?? event.price,
+                            minimumObservedPrice: observed.map(\.low).min() ?? event.price,
                             entryDate: event.time,
                             observedCandles: observed
                         )

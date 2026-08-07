@@ -7,11 +7,8 @@
  * rows has to use this, or the push will keep saying something different from
  * what the app shows.
  *
- * Two rules this encodes, both requested directly:
- *   * Show the signal strength and the 24-hour volume in dollars.
- *   * Do not show false-breakout risk, and do not express volume as a multiple
- *     of the previous candle — "3.2x" says nothing about whether a coin is worth
- *     trading, while "$1.2B" does.
+ * The body exposes the same four score layers used by profile filters, so a
+ * lock-screen alert can be understood without opening the detail screen.
  */
 
 export type Direction = "bullish" | "bearish";
@@ -21,8 +18,10 @@ export interface NotificationInput {
   baseAsset: string;
   /** Journey status, as stored in signal_journey_events. */
   status: string;
-  /** 0–100 confidence for this journey. */
-  confidence: number;
+  regimeScore: number;
+  readinessScore: number;
+  breakoutQualityScore: number;
+  confirmationScore: number;
   /** 24-hour quote volume in USD. */
   quoteVolume24h: number;
   /** Price at the transition. */
@@ -41,9 +40,18 @@ const PHASE_TR: Record<string, { bullish: string; bearish: string }> = {
 };
 
 const PHASE_EN: Record<string, { bullish: string; bearish: string }> = {
-  pre_breakout: { bullish: "Waiting for breakout", bearish: "Waiting for breakdown" },
-  breakout_detected: { bullish: "Breakout started", bearish: "Breakdown started" },
-  confirmed: { bullish: "Breakout strengthening", bearish: "Breakdown strengthening" },
+  pre_breakout: {
+    bullish: "Waiting for breakout",
+    bearish: "Waiting for breakdown",
+  },
+  breakout_detected: {
+    bullish: "Breakout started",
+    bearish: "Breakdown started",
+  },
+  confirmed: {
+    bullish: "Breakout strengthening",
+    bearish: "Breakdown strengthening",
+  },
   retest: { bullish: "Level being tested", bearish: "Level being tested" },
   failed: { bullish: "Signal invalidated", bearish: "Signal invalidated" },
   expired: { bullish: "Tracking complete", bearish: "Tracking complete" },
@@ -61,7 +69,9 @@ export function formatVolume(value: number): string {
   for (const [size, suffix] of units) {
     if (value >= size) {
       const scaled = value / size;
-      return `$${scaled.toFixed(scaled >= 100 ? 0 : scaled >= 10 ? 1 : 2)}${suffix}`;
+      return `$${
+        scaled.toFixed(scaled >= 100 ? 0 : scaled >= 10 ? 1 : 2)
+      }${suffix}`;
     }
   }
   return `$${Math.round(value)}`;
@@ -74,17 +84,20 @@ export function formatPrice(value: number): string {
   return `$${value.toFixed(decimals).replace(/0+$/, "").replace(/\.$/, "")}`;
 }
 
-export function composeNotification(input: NotificationInput): { title: string; body: string } {
+export function composeNotification(
+  input: NotificationInput,
+): { title: string; body: string } {
   const table = input.language === "tr" ? PHASE_TR : PHASE_EN;
   const phase = table[input.status]?.[input.direction] ?? input.status;
-  const strength = Math.round(input.confidence);
-  const volume = formatVolume(input.quoteVolume24h);
-  const price = formatPrice(input.price);
+  const regime = Math.round(input.regimeScore);
+  const readiness = Math.round(input.readinessScore);
+  const quality = Math.round(input.breakoutQualityScore);
+  const confirmation = Math.round(input.confirmationScore);
 
   const title = `${input.baseAsset} · ${phase}`;
   const body = input.language === "tr"
-    ? `Güven ${strength}/100 · Hacim ${volume} · Fiyat ${price}`
-    : `Confidence ${strength}/100 · Vol. ${volume} · Price ${price}`;
+    ? `Rejim ${regime} · Hazırlık ${readiness} · Kalite ${quality} · Teyit ${confirmation}`
+    : `Regime ${regime} · Ready ${readiness} · Quality ${quality} · Confirm ${confirmation}`;
 
   return { title, body };
 }

@@ -9,14 +9,19 @@ struct SettingsView: View {
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("notificationsEnabled") private var notifications = false
     @AppStorage("preferredTimeframe") private var preferredTimeframe = "15m"
-    @AppStorage(JourneyModel.storageKey) private var journeyModel = JourneyModel.emaCross.rawValue
+    @AppStorage(JourneyModel.storageKey) private var journeyModel = JourneyModel.donchian20.rawValue
     @AppStorage("notificationStatuses") private var notificationStatuses = "preBreakout,breakoutDetected,confirmed,retest,failed,expired"
     @AppStorage("notificationScope") private var notificationScope = "favorites"
-    @AppStorage("notificationMinimumScore") private var notificationMinimumScore = 0
+    @AppStorage("notificationMinimumRegimeScore") private var notificationMinimumRegimeScore = 0
+    @AppStorage("notificationMinimumReadinessScore") private var notificationMinimumReadinessScore = 0
+    // Keep the legacy key so existing installs preserve their quality threshold.
+    @AppStorage("notificationMinimumScore") private var notificationMinimumBreakoutQualityScore = 0
+    @AppStorage("notificationMinimumConfirmationScore") private var notificationMinimumConfirmationScore = 0
+    /// Same minimum 24h USDT volume used by the breakout-scenario screen.
+    /// Stored in millions to keep the stepper compact and understandable.
+    @AppStorage("notificationMinimumVolumeMillions") private var notificationMinimumVolumeMillions = 0
     @AppStorage("appLanguage") private var appLanguage = AppLanguage.default.rawValue
     @AppStorage("themeMode") private var themeMode = AppThemeMode.system.rawValue
-    @AppStorage(PreferredExchange.storageKey) private var preferredExchange = PreferredExchange.binance.rawValue
-    @State private var permissionMessage: String?
     @State private var notificationAuthorized = false
     @State private var account: UserSyncService.AccountSnapshot = .anonymous
     @State private var appleNonce = ""
@@ -42,7 +47,7 @@ struct SettingsView: View {
                             Text(account.displayName).font(.headline)
                             Text(account.isAnonymous
                                  ? L10n.text("Anonymous local account", "Anonim yerel hesap")
-                                 : account.email ?? L10n.text("Connected with Apple", "Apple ile bağlandı"))
+                                 : L10n.text("Connected with Apple", "Apple ile bağlandı"))
                                 .font(.caption)
                                 .foregroundStyle(TrendysseyColor.secondaryText)
                         }
@@ -81,7 +86,7 @@ struct SettingsView: View {
             Section(L10n.text("SUBSCRIPTION", "ABONELİK")) {
                 NavigationLink { SubscriptionView() } label: {
                     LabeledContent {
-                        Text(environment.subscriptionStore.isSubscribed ? L10n.text("Active", "Aktif") : L10n.text("3-day free trial", "3 günlük ücretsiz deneme"))
+                        Text(environment.subscriptionStore.isSubscribed ? L10n.text("Active", "Aktif") : L10n.text("View Pro", "Pro'yu İncele"))
                             .foregroundStyle(environment.subscriptionStore.isSubscribed ? TrendysseyColor.positive : TrendysseyColor.secondaryText)
                     } label: {
                         Label("Trendyssey Pro", systemImage: "sparkles")
@@ -90,7 +95,7 @@ struct SettingsView: View {
             }
             Section(L10n.text("ANALYSIS MODEL", "ANALİZ MODELİ")) {
                 Picker(L10n.text("Model", "Model"), selection: $journeyModel) {
-                    ForEach(JourneyModel.allCases) { model in
+                    ForEach(JourneyModel.selectableCases) { model in
                         Text(model.title).tag(model.rawValue)
                     }
                 }
@@ -99,9 +104,6 @@ struct SettingsView: View {
                         Text(timeframe.title).tag(timeframe.rawValue)
                     }
                 }
-                Text(selectedJourneyModel.summary)
-                    .font(.caption)
-                    .foregroundStyle(TrendysseyColor.secondaryText)
                 NavigationLink {
                     if environment.subscriptionStore.isSubscribed { DailyBreakoutSimulatorView() }
                     else { SubscriptionView() }
@@ -130,14 +132,46 @@ struct SettingsView: View {
                 }
                 .pickerStyle(.segmented)
                 .disabled(!environment.subscriptionStore.isSubscribed)
+                DisclosureGroup {
+                    notificationScoreStepper(
+                        L10n.text("Minimum regime", "Minimum rejim"),
+                        value: $notificationMinimumRegimeScore
+                    )
+                    notificationScoreStepper(
+                        L10n.text("Minimum readiness", "Minimum hazırlık"),
+                        value: $notificationMinimumReadinessScore
+                    )
+                    notificationScoreStepper(
+                        L10n.text("Minimum breakout quality", "Minimum kırılım kalitesi"),
+                        value: $notificationMinimumBreakoutQualityScore
+                    )
+                    notificationScoreStepper(
+                        L10n.text("Minimum confirmation", "Minimum teyit"),
+                        value: $notificationMinimumConfirmationScore
+                    )
+                    Text(L10n.text(
+                        "All four enabled thresholds must pass. Scores that do not apply yet are 0; leave later-stage thresholds at 0 to receive early alerts.",
+                        "Etkin dört eşiğin tamamı geçilmelidir. Henüz oluşmayan aşamaların puanı 0'dır; erken uyarılar için sonraki aşama eşiklerini 0 bırak."
+                    ))
+                    .font(.caption2).foregroundStyle(TrendysseyColor.secondaryText)
+                } label: {
+                    LabeledContent(
+                        L10n.text("Score thresholds", "Puan eşikleri"),
+                        value: L10n.text(
+                            "R\(notificationMinimumRegimeScore) · Rd\(notificationMinimumReadinessScore) · Q\(notificationMinimumBreakoutQualityScore) · C\(notificationMinimumConfirmationScore)",
+                            "R\(notificationMinimumRegimeScore) · H\(notificationMinimumReadinessScore) · K\(notificationMinimumBreakoutQualityScore) · T\(notificationMinimumConfirmationScore)"
+                        )
+                    )
+                }
+                .disabled(!environment.subscriptionStore.isSubscribed)
                 Stepper(
                     L10n.text(
-                        "Minimum confidence: \(notificationMinimumScore)",
-                        "Minimum güven puanı: \(notificationMinimumScore)"
+                        "Minimum 24h volume: \(notificationMinimumVolumeText)",
+                        "Minimum 24s hacim: \(notificationMinimumVolumeText)"
                     ),
-                    value: $notificationMinimumScore,
-                    in: 0...90,
-                    step: 10
+                    value: $notificationMinimumVolumeMillions,
+                    in: 0...100,
+                    step: 5
                 )
                 .disabled(!environment.subscriptionStore.isSubscribed)
                 DisclosureGroup {
@@ -148,12 +182,6 @@ struct SettingsView: View {
                     LabeledContent(L10n.text("Signal stages", "Sinyal aşamaları"), value: L10n.text("\(selectedStatuses.count) selected", "\(selectedStatuses.count) seçili"))
                 }
                 .disabled(!environment.subscriptionStore.isSubscribed)
-                if let permissionMessage { Text(permissionMessage).font(.caption).foregroundStyle(TrendysseyColor.secondaryText) }
-                Text(notificationScope == "all"
-                     ? L10n.text("All tracked spot coins matching the timeframe and selected signal states can trigger an alert.", "Zaman dilimi ve seçilen sinyal durumlarına uyan tüm spot coinler uyarı oluşturabilir.")
-                     : L10n.text("Only favorite coins matching the timeframe and selected signal states can trigger an alert.", "Yalnızca zaman dilimi ve seçilen sinyal durumlarına uyan favori coinler uyarı oluşturabilir."))
-                    .font(.caption)
-                    .foregroundStyle(TrendysseyColor.secondaryText)
             }
             Section(L10n.text("LANGUAGE & APPEARANCE", "DİL VE GÖRÜNÜM")) {
                 Picker(L10n.text("Language", "Dil"), selection: $appLanguage) {
@@ -161,9 +189,6 @@ struct SettingsView: View {
                 }
                 Picker(L10n.text("Appearance", "Görünüm"), selection: $themeMode) {
                     ForEach(AppThemeMode.allCases) { theme in Text(theme.title).tag(theme.rawValue) }
-                }
-                Picker(L10n.text("Exchange", "Borsa"), selection: $preferredExchange) {
-                    ForEach(PreferredExchange.allCases) { exchange in Text(exchange.title).tag(exchange.rawValue) }
                 }
             }
             Section(L10n.text("ABOUT", "HAKKINDA")) {
@@ -234,7 +259,7 @@ struct SettingsView: View {
     /// scores, and — through `serverSlug` — which backend model the alerts and the
     /// recorded signal history come from.
     private var selectedJourneyModel: JourneyModel {
-        JourneyModel(rawValue: journeyModel) ?? .emaCross
+        JourneyModel(rawValue: journeyModel) ?? .donchian20
     }
 
     /// The model alerts actually come from. Alerts are raised by the backend, so a
@@ -242,7 +267,7 @@ struct SettingsView: View {
     private var alertModel: JourneyModel {
         selectedJourneyModel.deliversAlerts
             ? selectedJourneyModel
-            : JourneyModel.allCases.first(where: \.deliversAlerts) ?? .emaCross
+            : JourneyModel.selectableCases.first(where: \.deliversAlerts) ?? .donchian20
     }
 
     private func proAnalysisLabel(_ title: String) -> some View {
@@ -286,11 +311,10 @@ struct SettingsView: View {
                 let granted = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound])
                 await MainActor.run {
                     notificationAuthorized = granted
-                    permissionMessage = granted ? L10n.text("Notification permission granted.", "Bildirim izni verildi.") : L10n.text("Notifications can be enabled in Settings.", "Bildirim izni Ayarlar uygulamasından açılabilir.")
                     if granted { UIApplication.shared.registerForRemoteNotifications() }
                     else { notifications = false }
                 }
-            } catch { await MainActor.run { permissionMessage = L10n.text("Notification permission could not be requested.", "Bildirim izni alınamadı."); notifications = false } }
+            } catch { await MainActor.run { notifications = false } }
         }
     }
 
@@ -300,7 +324,6 @@ struct SettingsView: View {
         notificationAuthorized = authorized
         if authorized { UIApplication.shared.registerForRemoteNotifications() }
         if notifications && !authorized { notifications = false }
-        permissionMessage = authorized ? L10n.text("Notifications are active on this device.", "Bildirimler bu cihazda aktif.") : L10n.text("Notification permission is required.", "Bildirim göndermek için izin gerekli.")
     }
 
     private var selectedStatuses: Set<SignalStatus> {
@@ -327,8 +350,18 @@ struct SettingsView: View {
         )
     }
 
+    private func notificationScoreStepper(_ title: String, value: Binding<Int>) -> some View {
+        Stepper("\(title): \(value.wrappedValue)", value: value, in: 0...90, step: 10)
+    }
+
+    private var notificationMinimumVolumeText: String {
+        notificationMinimumVolumeMillions <= 0
+            ? L10n.text("Off", "Kapalı")
+            : "$\(notificationMinimumVolumeMillions)M"
+    }
+
     private var preferenceFingerprint: String {
-        "\(notifications)|\(preferredTimeframe)|\(journeyModel)|\(notificationStatuses)|\(notificationScope)|\(notificationMinimumScore)|\(appLanguage)"
+        "\(notifications)|\(preferredTimeframe)|\(journeyModel)|\(notificationStatuses)|\(notificationScope)|\(notificationMinimumRegimeScore)|\(notificationMinimumReadinessScore)|\(notificationMinimumBreakoutQualityScore)|\(notificationMinimumConfirmationScore)|\(notificationMinimumVolumeMillions)|\(appLanguage)"
     }
 
     private func syncPreferences() {

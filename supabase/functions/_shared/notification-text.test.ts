@@ -1,8 +1,16 @@
-import { composeNotification, formatPrice, formatVolume } from "./notification-text.ts";
+import {
+  composeNotification,
+  formatPrice,
+  formatVolume,
+} from "./notification-text.ts";
 
 function assertEqual(actual: unknown, expected: unknown, label: string): void {
   if (actual !== expected) {
-    throw new Error(`${label}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+    throw new Error(
+      `${label}: expected ${JSON.stringify(expected)}, got ${
+        JSON.stringify(actual)
+      }`,
+    );
   }
 }
 
@@ -19,18 +27,25 @@ Deno.test("price keeps precision for cheap coins", () => {
   assertEqual(formatPrice(0.00004212), "$0.000042", "sub-cent");
 });
 
-Deno.test("body carries strength out of 100, compact volume and labeled price", () => {
+Deno.test("body carries all four score layers", () => {
   const { title, body } = composeNotification({
     baseAsset: "SOL",
     status: "breakout_detected",
-    confidence: 78.4,
+    regimeScore: 72,
+    readinessScore: 84,
+    breakoutQualityScore: 78.4,
+    confirmationScore: 35,
     quoteVolume24h: 1_234_567_890,
     price: 167.42,
     direction: "bullish",
     language: "tr",
   });
   assertEqual(title, "SOL · Kırılım başladı", "title");
-  assertEqual(body, "Güven 78/100 · Hacim $1.23B · Fiyat $167.42", "body");
+  assertEqual(
+    body,
+    "Rejim 72 · Hazırlık 84 · Kalite 78 · Teyit 35",
+    "body",
+  );
   if (/risk/i.test(body)) throw new Error("risk must not appear in the body");
   if (/\dx\b/.test(body)) throw new Error("volume must not be a multiple");
 });
@@ -39,20 +54,30 @@ Deno.test("the english body uses the same format", () => {
   const { body } = composeNotification({
     baseAsset: "SOL",
     status: "breakout_detected",
-    confidence: 60,
+    regimeScore: 55,
+    readinessScore: 70,
+    breakoutQualityScore: 60,
+    confirmationScore: 35,
     quoteVolume24h: 4_130_000,
     price: 0.001812,
     direction: "bullish",
     language: "en",
   });
-  assertEqual(body, "Confidence 60/100 · Vol. $4.13M · Price $0.001812", "en body");
+  assertEqual(
+    body,
+    "Regime 55 · Ready 70 · Quality 60 · Confirm 35",
+    "en body",
+  );
 });
 
 Deno.test("a bearish model reads as a breakdown", () => {
   const { title } = composeNotification({
     baseAsset: "AVAX",
     status: "breakout_detected",
-    confidence: 61,
+    regimeScore: 50,
+    readinessScore: 66,
+    breakoutQualityScore: 61,
+    confirmationScore: 35,
     quoteVolume24h: 42_000_000,
     price: 23.48,
     direction: "bearish",

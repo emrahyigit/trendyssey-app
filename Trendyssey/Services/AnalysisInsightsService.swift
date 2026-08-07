@@ -4,7 +4,7 @@ import Foundation
 /// journey events, so a fixed 24-hour window leaves them with almost nothing to
 /// measure; the default therefore scales with the timeframe.
 enum ScenarioLookback: Int, CaseIterable, Identifiable, Sendable {
-    case day1 = 24, day2 = 48, day3 = 72, week1 = 168, week2 = 336
+    case day1 = 24, day2 = 48, day3 = 72, week1 = 168
 
     var id: Int { rawValue }
 
@@ -18,7 +18,6 @@ enum ScenarioLookback: Int, CaseIterable, Identifiable, Sendable {
         case .day2: L10n.text("Last 2 days", "Son 2 gün")
         case .day3: L10n.text("Last 3 days", "Son 3 gün")
         case .week1: L10n.text("Last 7 days", "Son 7 gün")
-        case .week2: L10n.text("Last 14 days", "Son 14 gün")
         }
     }
 
@@ -28,62 +27,68 @@ enum ScenarioLookback: Int, CaseIterable, Identifiable, Sendable {
         case .day2: L10n.text("2D", "2G")
         case .day3: L10n.text("3D", "3G")
         case .week1: L10n.text("7D", "7G")
-        case .week2: L10n.text("14D", "14G")
         }
     }
 
-    /// Candle interval used to replay what price did after each entry. Must be
-    /// one of the four analysis timeframes, and coarse enough that one
-    /// 100-candle fetch spans the whole window — otherwise the tail of a long
-    /// scenario would be measured against no data.
-    nonisolated var observationInterval: String {
-        switch self {
-        case .day1: "15m"   // 24h  = 96 candles
-        case .day2: "1h"    // 48h  = 48 candles
-        case .day3: "1h"    // 72h  = 72 candles
-        case .week1: "4h"   // 7d   = 42 candles
-        case .week2: "4h"   // 14d  = 84 candles
-        }
-    }
+    /// Candle interval used to replay what price did after each entry. Every
+    /// window uses the same fine 15m grid so the same entry produces the same
+    /// sale in every window — a coarser grid would skip the entry's own hour,
+    /// miss early target touches and make windows disagree. The longest
+    /// window, 7 days, needs 672 candles and stays inside Binance's
+    /// 1000-candle fetch cap; that cap is why there is no longer window.
+    nonisolated var observationInterval: String { "15m" }
 
-    /// A window that leaves each timeframe enough closed candles to produce a
-    /// meaningful number of journey events.
-    static func `default`(for timeframe: AnalysisTimeframe) -> ScenarioLookback {
-        switch timeframe {
-        case .m15: .day1
-        case .h1: .day3
-        case .h4: .week1
-        case .d1: .week2
-        }
-    }
+    /// Candles needed to span the whole window at `observationInterval`,
+    /// with a small buffer.
+    nonisolated var observationCandleLimit: Int { Int(hours * 4) + 8 }
 }
 
 struct BreakoutScenarioEntry: Identifiable, Sendable {
     let id: UUID
     let symbol: String
     let status: SignalStatus
-    let confidenceScore: Int
+    let direction: JourneyDirection
+    let regimeScore: Int
+    let readinessScore: Int
+    let breakoutQualityScore: Int
+    let confirmationScore: Int
     let falseBreakoutRisk: Int
     let volumeRatio: Double
+    /// The coin's 24h quote volume, so the page's minimum-volume filter can
+    /// work on loaded entries without refetching.
+    let quoteVolume24h: Double
     let entryPrice: Double
     let latestPrice: Double
     let maximumObservedPrice: Double
+    let minimumObservedPrice: Double
     let entryDate: Date
     let observedCandles: [PriceCandle]
 
     var currentReturnPercent: Double {
         guard entryPrice > 0 else { return 0 }
-        return (latestPrice - entryPrice) / entryPrice * 100
+        return switch direction {
+        case .bullish: (latestPrice - entryPrice) / entryPrice * 100
+        case .bearish: (entryPrice - latestPrice) / entryPrice * 100
+        }
     }
 
     var maximumReturnPercent: Double {
         guard entryPrice > 0 else { return 0 }
-        return (maximumObservedPrice - entryPrice) / entryPrice * 100
+        return switch direction {
+        case .bullish: (maximumObservedPrice - entryPrice) / entryPrice * 100
+        case .bearish: (entryPrice - minimumObservedPrice) / entryPrice * 100
+        }
     }
 
     func targetHitDate(profitTarget: Double) -> Date? {
-        let targetPrice = entryPrice * (1 + profitTarget / 100)
-        return observedCandles.first(where: { $0.high >= targetPrice })?.closeTime
+        switch direction {
+        case .bullish:
+            let targetPrice = entryPrice * (1 + profitTarget / 100)
+            return observedCandles.first(where: { $0.high >= targetPrice })?.closeTime
+        case .bearish:
+            let targetPrice = entryPrice * (1 - profitTarget / 100)
+            return observedCandles.first(where: { $0.low <= targetPrice })?.closeTime
+        }
     }
 }
 
@@ -101,10 +106,11 @@ actor AnalysisInsightsService {
     /// so even a truncated window starts with the coins most worth acting on.
     private static let eventRowLimit = 800
 
-    /// The scenario replays the highest-volume coins that produced a matching
-    /// signal in the window. Each coin costs one observation-candle request, so
-    /// this bound is what keeps the page fast.
-    private static let scenarioSymbolLimit = 20
+    /// The scenario replays every universe coin that produced a matching signal
+    /// in the window — the scan universe is 100 coins and observation candles
+    /// come straight from Binance in parallel, so covering all of them is cheap.
+    /// The volume filter on the page is what narrows this down, not a hard cap.
+    private static let scenarioSymbolLimit = 100
 
     private struct Model: Decodable, Sendable {
         let slug: String
@@ -122,21 +128,30 @@ actor AnalysisInsightsService {
         let price: Double
         let candle_close_time: String
         let confidence: Int
+        let regime_score: Int?
+        let readiness_score: Int?
+        let breakout_quality_score: Int?
+        let confirmation_score: Int?
         let false_breakout_risk: Int
         let volume_ratio: Double?
+        /// The coin's 24h volume when the event happened. Filtering on this
+        /// instead of the live volume keeps the replay deterministic: a coin
+        /// whose volume fell overnight no longer loses its past trades.
+        let quote_volume_24h: Double?
         let analysis_models: Model
         let symbols: Symbol
     }
 
     func scenarioEntries(
         modelSlug: String,
+        direction: JourneyDirection,
         timeframe: String,
         status: SignalStatus,
         lookback: ScenarioLookback
     ) async throws -> BreakoutScenarioResult {
         var components = URLComponents(url: SupabaseConfig.projectURL.appending(path: "rest/v1/signal_journey_events"), resolvingAgainstBaseURL: false)!
-        components.queryItems = [
-            .init(name: "select", value: "id,status,price,candle_close_time,confidence,false_breakout_risk,volume_ratio,analysis_models!inner(slug,display_name),symbols!inner(symbol,quote_volume_24h)"),
+        var queryItems: [URLQueryItem] = [
+            .init(name: "select", value: "id,status,price,candle_close_time,confidence,regime_score,readiness_score,breakout_quality_score,confirmation_score,false_breakout_risk,volume_ratio,quote_volume_24h,analysis_models!inner(slug,display_name),symbols!inner(symbol,quote_volume_24h)"),
             .init(name: "status", value: "eq.\(Self.databaseStatus(status))"),
             .init(name: "timeframe", value: "eq.\(timeframe)"),
             .init(name: "analysis_models.slug", value: "eq.\(modelSlug)"),
@@ -146,7 +161,26 @@ actor AnalysisInsightsService {
             .init(name: "order", value: "symbols(quote_volume_24h).desc,candle_close_time.desc"),
             .init(name: "limit", value: "\(Self.eventRowLimit)"),
         ]
-        let allRows = try await get([ScenarioEventRow].self, url: components.url!)
+        if modelSlug == "double-bottom-v1" || modelSlug == "double-top-v1" {
+            // Never mix legacy all-purpose confidence rows into the independent
+            // v2 pattern layers shown by the scenario screen.
+            queryItems.append(.init(name: "scoring_version", value: "eq.breakout-scores-v2-pattern"))
+        }
+        components.queryItems = queryItems
+        var allRows: [ScenarioEventRow]
+        do {
+            allRows = try await get([ScenarioEventRow].self, url: components.url!)
+        } catch {
+            // The event-level volume column ships in a migration; if that has
+            // not been applied yet the select 400s. Retry without the column
+            // so the page keeps working on the live-volume fallback.
+            components.queryItems = queryItems.map { item in
+                item.name == "select"
+                    ? URLQueryItem(name: "select", value: item.value?.replacingOccurrences(of: ",quote_volume_24h,analysis_models", with: ",analysis_models"))
+                    : item
+            }
+            allRows = try await get([ScenarioEventRow].self, url: components.url!)
+        }
         let eligibleRows = allRows.filter { CryptoAssetUniverse.includes(symbol: $0.symbols.symbol) }
         // Rows arrive ordered by volume, so the first N distinct symbols are the
         // highest-volume coins that actually produced this signal in the window.
@@ -172,7 +206,7 @@ actor AnalysisInsightsService {
                         for: symbol,
                         interval: interval,
                         startingAt: earliest,
-                        limit: 100
+                        limit: lookback.observationCandleLimit
                     ) else { return [] }
                     return datedEvents.map { row, entryDate in
                         let observed = candles.filter { $0.openTime > entryDate }
@@ -180,12 +214,18 @@ actor AnalysisInsightsService {
                             id: row.id,
                             symbol: symbol,
                             status: status,
-                            confidenceScore: row.confidence,
+                            direction: direction,
+                            regimeScore: row.regime_score ?? 0,
+                            readinessScore: row.readiness_score ?? 0,
+                            breakoutQualityScore: row.breakout_quality_score ?? row.confidence,
+                            confirmationScore: row.confirmation_score ?? 0,
                             falseBreakoutRisk: row.false_breakout_risk,
                             volumeRatio: row.volume_ratio ?? 0,
+                            quoteVolume24h: row.quote_volume_24h ?? row.symbols.quote_volume_24h ?? 0,
                             entryPrice: row.price,
                             latestPrice: observed.last?.close ?? row.price,
                             maximumObservedPrice: observed.map(\.high).max() ?? row.price,
+                            minimumObservedPrice: observed.map(\.low).min() ?? row.price,
                             entryDate: entryDate,
                             observedCandles: observed
                         )

@@ -41,7 +41,7 @@ enum SignalStatus: String, CaseIterable, Codable, Sendable {
     }
 
     static var scenarioEntryCases: [SignalStatus] {
-        userSelectableCases.filter { $0 != .expired }
+        userSelectableCases.filter { $0 != .failed && $0 != .expired }
     }
 
     var title: String { title(.bullish) }
@@ -126,6 +126,7 @@ struct SignalScoreComponent: Codable, Hashable, Sendable, Identifiable {
 
 struct SignalEvidence: Codable, Hashable, Sendable {
     let model: String?
+    let engineKind: String?
     let nearBreakout: Bool?
     let priceBrokeOut: Bool?
     let brokeOut: Bool?
@@ -169,6 +170,16 @@ struct SignalEvidence: Codable, Hashable, Sendable {
     let necklineOpenTime: String?
     let secondPivotOpenTime: String?
     let confidenceFactors: [EvidenceConfidenceFactor]?
+    let scoreLayers: SignalScoreLayers?
+}
+
+struct SignalScoreLayers: Codable, Hashable, Sendable {
+    let regimeScore: Int
+    let readinessScore: Int
+    let breakoutQualityScore: Int
+    let confirmationScore: Int
+    let breakoutTriggered: Bool
+    let scoringVersion: String?
 }
 
 /// One scored ingredient as the server stored it in the signal's evidence.
@@ -178,7 +189,7 @@ struct EvidenceConfidenceFactor: Codable, Hashable, Sendable {
     let maxScore: Int
 }
 
-struct MarketSignal: Identifiable, Codable, Hashable, Sendable {
+struct MarketSignal: Identifiable, Hashable, Sendable {
     let id: UUID
     let journeyID: UUID?
     let symbol: String
@@ -188,6 +199,11 @@ struct MarketSignal: Identifiable, Codable, Hashable, Sendable {
     let change24h: Double
     let quoteVolume24h: Double
     let confidence: Int
+    let regimeScore: Int
+    let readinessScore: Int
+    let breakoutQualityScore: Int
+    let confirmationScore: Int
+    let breakoutTriggered: Bool
     let falseBreakoutRisk: Int
     let activityScore: Int
     let volumeRatio: Double
@@ -209,6 +225,11 @@ struct MarketSignal: Identifiable, Codable, Hashable, Sendable {
         change24h: Double,
         quoteVolume24h: Double = 0,
         confidence: Int,
+        regimeScore: Int = 0,
+        readinessScore: Int = 0,
+        breakoutQualityScore: Int? = nil,
+        confirmationScore: Int = 0,
+        breakoutTriggered: Bool = false,
         falseBreakoutRisk: Int,
         activityScore: Int,
         volumeRatio: Double,
@@ -229,6 +250,11 @@ struct MarketSignal: Identifiable, Codable, Hashable, Sendable {
         self.change24h = change24h
         self.quoteVolume24h = quoteVolume24h
         self.confidence = confidence
+        self.regimeScore = regimeScore
+        self.readinessScore = readinessScore
+        self.breakoutQualityScore = breakoutQualityScore ?? confidence
+        self.confirmationScore = confirmationScore
+        self.breakoutTriggered = breakoutTriggered
         self.falseBreakoutRisk = falseBreakoutRisk
         self.activityScore = activityScore
         self.volumeRatio = volumeRatio
@@ -244,7 +270,33 @@ struct MarketSignal: Identifiable, Codable, Hashable, Sendable {
     var baseSymbol: String { symbol.replacingOccurrences(of: "USDT", with: "") }
     var usesAdvancedJourneyModel: Bool { evidence?.model == "gpt-5-6-sol-v1" }
     var qualityTitle: String {
-        L10n.text("Confidence score", "Güven puanı")
+        L10n.text("Breakout quality", "Kırılım kalitesi")
+    }
+
+    /// The score that answers the current lifecycle question. A flat average is
+    /// misleading because confirmation is intentionally zero before a trigger.
+    var stageScore: Int {
+        switch status {
+        case .watching, .preBreakout:
+            readinessScore
+        case .breakoutDetected:
+            breakoutQualityScore
+        case .confirmed, .retest:
+            confirmationScore
+        case .failed, .expired:
+            breakoutQualityScore
+        }
+    }
+
+    var stageScoreTitle: String {
+        switch status {
+        case .watching, .preBreakout:
+            L10n.text("Readiness", "Hazırlık")
+        case .breakoutDetected, .failed, .expired:
+            L10n.text("Breakout quality", "Kırılım kalitesi")
+        case .confirmed, .retest:
+            L10n.text("Confirmation", "Teyit")
+        }
     }
 }
 

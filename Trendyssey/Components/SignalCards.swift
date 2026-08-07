@@ -3,13 +3,13 @@ import UIKit
 
 struct FeaturedSignalCard: View {
     let signal: MarketSignal
-    @AppStorage(JourneyModel.storageKey) private var journeyModel = JourneyModel.emaCross.rawValue
+    @AppStorage(JourneyModel.storageKey) private var journeyModel = JourneyModel.donchian20.rawValue
 
     // Phase and score come straight from the server's signal row — the same
     // values that drove the push notification and the lists.
     private var currentPhase: SignalStatus { signal.status }
-    private var direction: JourneyDirection { (JourneyModel(rawValue: journeyModel) ?? .emaCross).direction }
-    private var confidence: Int { signal.confidence }
+    private var direction: JourneyDirection { (JourneyModel(rawValue: journeyModel) ?? .donchian20).direction }
+    private var primaryScore: Int { signal.stageScore }
 
     var body: some View {
         SurfaceCard {
@@ -32,7 +32,7 @@ struct FeaturedSignalCard: View {
                 }
                 SignalJourneyProgress(status: currentPhase, direction: direction, compact: true)
                 HStack(alignment: .bottom) {
-                    VStack(alignment: .leading, spacing: 3) { Text(signal.qualityTitle.uppercased()).font(.caption2.bold()).foregroundStyle(TrendysseyColor.secondaryText); Text("\(confidence)").font(.system(size: 52, weight: .bold, design: .rounded)).monospacedDigit() + Text(" / 100").font(.subheadline).foregroundColor(TrendysseyColor.secondaryText) }
+                    VStack(alignment: .leading, spacing: 3) { Text(signal.stageScoreTitle.uppercased()).font(.caption2.bold()).foregroundStyle(TrendysseyColor.secondaryText); Text("\(primaryScore)").font(.system(size: 52, weight: .bold, design: .rounded)).monospacedDigit() + Text(" / 100").font(.subheadline).foregroundColor(TrendysseyColor.secondaryText) }
                     Spacer()
                     VStack(alignment: .trailing, spacing: 3) {
                         Text(L10n.text("24H VOLUME", "24S HACİM"))
@@ -44,16 +44,35 @@ struct FeaturedSignalCard: View {
                             .foregroundStyle(TrendysseyColor.accent)
                     }
                 }
+                HStack(spacing: 8) {
+                    scoreChip(L10n.text("Regime", "Rejim"), signal.regimeScore)
+                    scoreChip(L10n.text("Ready", "Hazır"), signal.readinessScore)
+                    scoreChip(L10n.text("Quality", "Kalite"), signal.breakoutQualityScore)
+                    scoreChip(L10n.text("Confirm", "Teyit"), signal.confirmationScore)
+                }
             }
         }
+    }
+
+    private func scoreChip(_ title: String, _ score: Int) -> some View {
+        VStack(spacing: 2) {
+            Text(title.uppercased())
+                .font(.system(size: 8, weight: .bold))
+                .foregroundStyle(TrendysseyColor.secondaryText)
+            Text("\(score)")
+                .font(.caption.bold()).monospacedDigit()
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 7)
+        .background(TrendysseyColor.elevated, in: RoundedRectangle(cornerRadius: 10))
     }
 }
 
 struct SignalRow: View {
     let signal: MarketSignal
-    @AppStorage(JourneyModel.storageKey) private var journeyModel = JourneyModel.emaCross.rawValue
+    @AppStorage(JourneyModel.storageKey) private var journeyModel = JourneyModel.donchian20.rawValue
 
-    private var direction: JourneyDirection { (JourneyModel(rawValue: journeyModel) ?? .emaCross).direction }
+    private var direction: JourneyDirection { (JourneyModel(rawValue: journeyModel) ?? .donchian20).direction }
 
     var body: some View {
         HStack(spacing: 13) {
@@ -61,9 +80,16 @@ struct SignalRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(signal.baseSymbol).font(.headline)
                 if signal.hasScore {
-                    Text("\(signal.status.title(direction)) (\(signal.confidence))")
+                    Text("\(signal.status.title(direction)) · \(signal.stageScoreTitle) \(signal.stageScore)")
                         .font(.caption.weight(.semibold)).foregroundStyle(strengthColor)
                         .lineLimit(1).minimumScaleFactor(0.8)
+                    Text(L10n.text(
+                        "R \(signal.regimeScore) · Rd \(signal.readinessScore) · Q \(signal.breakoutQualityScore) · C \(signal.confirmationScore)",
+                        "R \(signal.regimeScore) · H \(signal.readinessScore) · K \(signal.breakoutQualityScore) · T \(signal.confirmationScore)"
+                    ))
+                    .font(.caption2.weight(.medium)).monospacedDigit()
+                    .foregroundStyle(TrendysseyColor.secondaryText)
+                    .lineLimit(1).minimumScaleFactor(0.72)
                 } else {
                     Label(L10n.text("Not enough volume to analyze", "Analiz için yeterli hacim yok"), systemImage: "antenna.radiowaves.left.and.right.slash")
                         .font(.caption.weight(.semibold)).foregroundStyle(TrendysseyColor.secondaryText)
@@ -86,7 +112,7 @@ struct SignalRow: View {
 
     private var strengthColor: Color {
         guard signal.status != .watching else { return TrendysseyColor.secondaryText }
-        return switch signal.confidence {
+        return switch signal.stageScore {
         case 75...: TrendysseyColor.positive
         case 55...: TrendysseyColor.warning
         default: TrendysseyColor.negative

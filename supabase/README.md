@@ -1,54 +1,43 @@
 # Trendyssey backend
 
-## Where this is going
+## Current architecture
 
-The app derives journeys from candles; the server records "what changed since I
-last looked". A missed run loses a transition permanently, the app still shows it,
-and the two disagree — that is the PEPE case, and it is a data-model problem, not
-a bug in either side.
+`scan-market` is the single signal writer. It reads completed Binance Spot
+candles for the top-100 eligible USDT pairs on 15m, 1h, 4h and 1d, then stores
+the phase, evidence and scores that every app screen reads. The retired candle
+store migrations remain as history; `20260726_top100_four_timeframes.sql`
+dropped that table and its jobs.
 
-The target is one input, one algorithm, one truth: the server stores candles,
-re-derives whole windows idempotently, and the app reads the result instead of
-computing its own.
+`20260801_breakout_engines_and_scores.sql` separates detector identity from
+scoring. Six breakout variants are active:
 
-| Phase | What | Status |
-| --- | --- | --- |
-| 0 | Idempotency key, `notifiable` flag, self-healing reconciliation | applied |
-| 1 | `candles` table + `sync-candles` job | applied + scheduled (2026-07-26) |
-| 2 | `journey_state`, one row per symbol/model/timeframe | applied |
-| 3 | WebSocket ingest | not planned |
+| Model | Engine |
+| --- | --- |
+| `donchian-20-v1` | 20-candle price channel |
+| `donchian-50-v1` | 50-candle price channel |
+| `horizontal-level-v1` | confirmed pivot-high clusters |
+| `consolidation-v1` | compact-range expansion |
+| `double-bottom-v1` | bullish neckline pattern |
+| `double-top-v1` | bearish neckline pattern |
 
-Applied in order, phases 0–2 are what stop the app and the server from diverging.
+EMA structure is retained as a shared regime/trend feature, not a selectable
+breakout. Every active model records four independent 0–100 values:
+`regime_score`, `readiness_score`, `breakout_quality_score` and
+`confirmation_score`; `breakout_triggered` is a boolean closed-candle fact.
+The legacy `breakout_confidence_score` mirrors breakout quality while older app
+versions are phased out.
 
-**Candle store live since 2026-07-26.** `sync-candles` requires the cron
-secret (`x-cron-secret`, deployed with `--no-verify-jwt`) and runs on pg_cron
-(`candles-15m` … `candles-1d`), sweeping the top-200 USDT pairs; `scan-market`
-also upserts the tail of every candle series it analyzes, so the store can
-never lag behind a signal it produced. The iOS `CandleService` reads closed
-candles from this store (Binance is used only for the still-forming candle and
-as a fallback for unswept coins), which makes the store the single input behind
-charts, on-device journeys, scenarios and server-side signals alike.
-`derive-journeys` remains unscheduled: scan-market itself writes each pattern
-model's full journey history (`notifiable = false`) on every scan.
+Double Bottom and Double Top use `breakout-scores-v2-pattern`: reversal context
+and directional BTC alignment form regime; pivot structure and neckline
+proximity form readiness; only the neckline-clearing candle forms quality; only
+later holds, retests and continuation form confirmation. Double Top reverses
+the BTC-relative-strength interpretation, so weakness is alignment rather than
+a penalty.
 
-# Double Bottom / Double Top alerts
+Unknown `engine_kind` values fail closed. They never silently run through the
+EMA engine.
 
-**Applied 2026-07-26.** All three models are now interpreted server-side by
-`scan-market` (source in `functions/scan-market/`): `gpt-5-6-sol-v1` keeps the
-EMA engine (`_shared/indicators.ts` + `_shared/signal_lifecycle.ts`), while
-`double-bottom-v1` / `double-top-v1` run `_shared/double-pattern.ts` — the
-line-for-line port of the on-device analyzer. Each model writes its own
-`breakout_signals` row per symbol/timeframe (patterns use `direction = 'down'`
-for Double Top), and the existing triggers turn status transitions into journey
-events, outcome snapshots and push notifications. Before this split every
-active model row was fed through the EMA engine, which produced identical,
-EMA-derived "double pattern" signals; those rows were purged when the split
-shipped.
-
-The sections below describe the earlier plan (`detect-double-patterns`,
-`derive-journeys` + the candle store). They are kept as the future
-single-input architecture; `sync-candles` and `derive-journeys` are deployed
-but unscheduled, and the `candles` table is empty.
+# Historical Double Bottom / Double Top notes
 
 ## What is here
 

@@ -25,17 +25,38 @@ import {
 import {
   analyze,
   applySignalState,
+  atr as calculateATR,
+  ema as calculateEMA,
   emaConfidenceFactors,
   type MarketCandle,
   parseKlines,
   resolveTimeframeScoringConfiguration,
+  rsi as calculateRSI,
 } from "../_shared/indicators.ts";
 import { nextSignalState } from "../_shared/signal_lifecycle.ts";
+import {
+  analyzeLevelBreakout,
+  applyBreakoutStateScores,
+  type BreakoutEngineKind,
+  nextLevelSignalState,
+} from "../_shared/breakout-engine.ts";
 import {
   analyze as analyzeDoublePattern,
   type Candle as PatternCandle,
   type Direction,
+  patternScoreLayers,
 } from "../_shared/double-pattern.ts";
+import {
+  applyDirectionalAdjustment,
+  type DirectionalFactor,
+  directionalFactors,
+} from "../_shared/directional-factors.ts";
+import {
+  BTC_STRENGTH_MAX_SCORE,
+  type BTCStrengthObservation,
+  btcStrengthObservation,
+  NEUTRAL_BTC_STRENGTH,
+} from "../_shared/relative_strength.ts";
 
 const supportedTimeframes = new Set(["15m", "1h", "4h", "1d"]);
 
@@ -51,6 +72,12 @@ const DOUBLE_PATTERN_DIRECTIONS: Record<string, Direction> = {
   "double-bottom-v1": "bullish",
   "double-top-v1": "bearish",
 };
+
+const LEVEL_BREAKOUT_ENGINES = new Set<BreakoutEngineKind>([
+  "donchian",
+  "horizontal_level",
+  "consolidation",
+]);
 
 /**
  * 502 candles: the pattern analyzer sees the same ~500-candle window the app
@@ -83,6 +110,26 @@ function patternActivityScore(volumeRatio: number): number {
   return Math.round(Math.min(1, Math.max(0, (volumeRatio - 0.5) / 2.5)) * 100);
 }
 
+/** The strength-vs-BTC ingredient, shared by every model on this symbol. */
+interface BTCStrengthInput {
+  score: number;
+  observation: BTCStrengthObservation | null;
+}
+
+/** Evidence block explaining the btcStrength factor, or why it is neutral. */
+function btcStrengthFacts(btc: BTCStrengthInput): Record<string, unknown> {
+  return {
+    score: btc.score,
+    maxScore: BTC_STRENGTH_MAX_SCORE,
+    coinReturn: btc.observation?.coinReturn ?? null,
+    btcReturn: btc.observation?.btcReturn ?? null,
+    excessReturn: btc.observation?.excessReturn ?? null,
+    resilience: btc.observation?.resilience ?? null,
+    samples: btc.observation?.samples ?? 0,
+    neutral: btc.observation === null,
+  };
+}
+
 /**
  * Stable UUID for a past pattern's journey, derived from what identifies the
  * pattern. Re-deriving the same history on every scan must map each walk to the
@@ -106,6 +153,7 @@ async function scanDoublePattern(
   symbol: any,
   timeframe: string,
   candles: MarketCandle[],
+  btc: BTCStrengthInput,
 ): Promise<void> {
   const direction = DOUBLE_PATTERN_DIRECTIONS[model.slug];
   const dbDirection = direction === "bullish" ? "up" : "down";
@@ -120,7 +168,23 @@ async function scanDoublePattern(
   }));
 
   const result = analyzeDoublePattern(patternCandles, direction);
+  // Relative strength is directional: strength helps a Double Bottom, while
+  // weakness helps a Double Top. The old scorer rewarded strength in both.
+  const directionalMarketScore = direction === "bullish"
+    ? btc.score
+    : BTC_STRENGTH_MAX_SCORE - btc.score;
+  const factors = result.factors.length > 0
+    ? [...result.factors, {
+      key: "btcStrength",
+      score: directionalMarketScore,
+      maxScore: BTC_STRENGTH_MAX_SCORE,
+    }]
+    : result.factors;
   const current = candles.at(-1)!;
+  const closes = candles.map((candle) => candle.close);
+  const technicalRSI = calculateRSI(closes, 14);
+  const technicalEMA = calculateEMA(closes, 20);
+  const technicalATR = calculateATR(candles, 14);
   const candleClose = new Date(current.closeTime).toISOString();
   const status = result.phase;
 
@@ -148,7 +212,14 @@ async function scanDoublePattern(
 
   const neckline = result.pattern?.neckline ?? Number(previous?.breakout_level ?? 0);
   const breakoutLevel = neckline > 0 ? neckline : current.close;
-  const confidence = result.confidence;
+  const scoreLayers = patternScoreLayers(
+    patternCandles,
+    result,
+    direction,
+    directionalMarketScore,
+  );
+  // The legacy column mirrors the explicit quality layer for old clients.
+  const confidence = scoreLayers.breakoutQualityScore;
   const risk = Math.max(0, Math.min(100, 100 - confidence));
 
   const stateStartedAt = status === previousStatus && samePattern
@@ -164,7 +235,8 @@ async function scanDoublePattern(
     (result.pattern
       ? `neckline ${result.pattern.neckline}, depth ${(result.pattern.depth * 100).toFixed(1)}%, pivot difference ${(result.pattern.difference * 100).toFixed(2)}%. `
       : `not present. `) +
-    `Confidence ${confidence}/100, volume ${result.volumeRatio.toFixed(1)}x. State: ${status}.`;
+    `Scores R${scoreLayers.regimeScore}/Rd${scoreLayers.readinessScore}/Q${scoreLayers.breakoutQualityScore}/C${scoreLayers.confirmationScore}, ` +
+    `volume ${result.volumeRatio.toFixed(1)}x. State: ${status}.`;
 
   const payload = {
     analysis_model_id: model.id,
@@ -180,6 +252,12 @@ async function scanDoublePattern(
     candle_close_time: candleClose,
     is_candle_closed: true,
     breakout_confidence_score: confidence,
+    regime_score: scoreLayers.regimeScore,
+    readiness_score: scoreLayers.readinessScore,
+    breakout_quality_score: confidence,
+    confirmation_score: scoreLayers.confirmationScore,
+    breakout_triggered: scoreLayers.breakoutTriggered,
+    scoring_version: scoreLayers.scoringVersion,
     false_breakout_risk: risk,
     market_activity_score: patternActivityScore(result.volumeRatio),
     volume_ratio: result.volumeRatio,
@@ -188,7 +266,7 @@ async function scanDoublePattern(
     estimated_volume_delta: current.takerBuyQuote - (current.quoteVolume - current.takerBuyQuote),
     taker_buy_ratio: current.quoteVolume > 0 ? current.takerBuyQuote / current.quoteVolume : 0.5,
     atr_change_percent: null,
-    rsi: null,
+    rsi: technicalRSI,
     explanation,
     explanation_facts: {
       source: "binance_rest",
@@ -218,7 +296,16 @@ async function scanDoublePattern(
       transition: `${previousStatus}->${status}`,
       volumeRatio: result.volumeRatio,
       quoteVolume24h: Number(symbol.quote_volume_24h ?? 0),
-      confidenceFactors: result.factors,
+      rsi: technicalRSI,
+      emaFast: technicalEMA,
+      atr: technicalATR,
+      btcStrength: {
+        ...btcStrengthFacts(btc),
+        directionalScore: directionalMarketScore,
+        direction,
+      },
+      scoreLayers,
+      confidenceFactors: factors,
     },
   };
 
@@ -231,8 +318,8 @@ async function scanDoublePattern(
   // transitions are written too — silently (notifiable = false). Without this,
   // the server's history starts the day the model went live and the scenario
   // screens miss transitions the app derives on the device. The unique key
-  // (signal, journey, status, close time) makes re-runs converge, and the
-  // live transition recorded by the row-update trigger wins on conflict.
+  // (signal, journey, status, close time) makes re-runs converge. Re-runs also
+  // upgrade older v1 event scores to the independent v2 pattern layers.
   if (signal.data?.id && result.walks.length > 0) {
     const eventRows: Record<string, unknown>[] = [];
     for (let index = 0; index < result.walks.length; index += 1) {
@@ -245,6 +332,26 @@ async function scanDoublePattern(
         ? journeyID
         : await deterministicJourneyID(`${model.id}|${symbol.id}|${timeframe}|${dbDirection}|${walkKey}`);
       for (const event of walk.events) {
+        // Re-score with only the candles that existed at the event close. Using
+        // the current scan's score here would leak future candles into backtests.
+        const eventIndex = patternCandles.findIndex((candle) =>
+          candle.closeTime.getTime() === event.time.getTime()
+        );
+        const eventCandles = eventIndex >= 0
+          ? patternCandles.slice(0, eventIndex + 1)
+          : patternCandles;
+        const eventResult = eventIndex >= 0
+          ? analyzeDoublePattern(eventCandles, direction)
+          : result;
+        const neutralDirectionalScore = direction === "bullish"
+          ? NEUTRAL_BTC_STRENGTH
+          : BTC_STRENGTH_MAX_SCORE - NEUTRAL_BTC_STRENGTH;
+        const eventScores = patternScoreLayers(
+          eventCandles,
+          eventResult,
+          direction,
+          neutralDirectionalScore,
+        );
         eventRows.push({
           analysis_model_id: model.id,
           breakout_signal_id: signal.data.id,
@@ -255,14 +362,25 @@ async function scanDoublePattern(
           candle_close_time: event.time.toISOString(),
           price: event.price,
           breakout_level: walkPattern.neckline,
-          confidence,
-          false_breakout_risk: risk,
-          volume_ratio: result.volumeRatio,
+          confidence: eventScores.breakoutQualityScore,
+          false_breakout_risk: Math.max(0, 100 - eventScores.breakoutQualityScore),
+          volume_ratio: eventResult.volumeRatio,
+          regime_score: eventScores.regimeScore,
+          readiness_score: eventScores.readinessScore,
+          breakout_quality_score: eventScores.breakoutQualityScore,
+          confirmation_score: eventScores.confirmationScore,
+          breakout_triggered: eventScores.breakoutTriggered,
+          scoring_version: eventScores.scoringVersion,
           notifiable: false,
+          quote_volume_24h: Number(symbol.quote_volume_24h ?? 0),
         });
       }
     }
     if (eventRows.length > 0) {
+      // ignoreDuplicates keeps history immutable: once an event is written its
+      // scores never change, so scenario replays see the same past every day.
+      // (Without it, every scan re-scored old events against a sliding candle
+      // window and past entries drifted in and out of score filters.)
       const eventsResult = await supabase.from("signal_journey_events").upsert(eventRows, {
         onConflict: "breakout_signal_id,journey_id,status,candle_close_time",
         ignoreDuplicates: true,
@@ -277,16 +395,21 @@ async function scanDoublePattern(
     }
   }
 
-  if (status !== "watching" && signal.data?.id && result.factors.length > 0) {
-    const rows = result.factors.map((factor) => ({
+  if (status !== "watching" && signal.data?.id) {
+    const rows = [
+      ["regime", scoreLayers.regimeScore],
+      ["readiness", scoreLayers.readinessScore],
+      ["quality", scoreLayers.breakoutQualityScore],
+      ["confirmation", scoreLayers.confirmationScore],
+    ].map(([key, value]) => ({
       breakout_signal_id: signal.data.id,
-      component_key: `confidence.${factor.key}`,
-      component_name: factor.key,
-      raw_value: factor.score,
-      normalized_value: factor.maxScore > 0 ? Number((factor.score / factor.maxScore).toFixed(4)) : 0,
-      score_contribution: factor.score,
-      maximum_score: factor.maxScore,
-      explanation: `Double-pattern factor "${factor.key}", scored ${factor.score}/${factor.maxScore} on the device-parity scale.`,
+      component_key: `layer.${key}`,
+      component_name: key,
+      raw_value: value,
+      normalized_value: Number(value) / 100,
+      score_contribution: value,
+      maximum_score: 100,
+      explanation: `Independent Double-pattern ${key} layer, scored ${value}/100.`,
     }));
     const componentResult = await supabase.from("signal_score_components").upsert(rows, {
       onConflict: "breakout_signal_id,component_key",
@@ -301,22 +424,24 @@ async function scanDoublePattern(
   }
 }
 
-/** The original EMA/Donchian path, unchanged. */
-async function scanEMA(
+/** Scans either the legacy EMA journey or one of the explicit level engines. */
+async function scanIndicatorModel(
   supabase: any,
   model: any,
   symbol: any,
   timeframe: string,
   candles: MarketCandle[],
+  btc: BTCStrengthInput,
 ): Promise<void> {
   // The EMA engine has always run on 302 candles; a longer window would shift
   // its EMA/RSI seeds and subtly change scores, so the extra history fetched
   // for the pattern models is trimmed off here.
   candles = candles.slice(-302);
   const timeframeConfiguration = resolveTimeframeScoringConfiguration(model.configuration, timeframe);
+  const engineKind = String(model.engine_kind ?? "");
   const { data: previous } = await supabase
     .from("breakout_signals")
-    .select("id,status,breakout_level,candle_close_time,explanation_facts,journey_id")
+    .select("id,status,breakout_level,candle_close_time,explanation_facts,journey_id,breakout_quality_score")
     .eq("analysis_model_id", model.id)
     .eq("symbol_id", symbol.id)
     .eq("timeframe", timeframe)
@@ -328,21 +453,98 @@ async function scanEMA(
   const previousStatus = String(previous?.status ?? "watching");
   const tracksExistingLevel = previousStatus === "breakout_detected" || previousStatus === "confirmed" || previousStatus === "retest";
   const previousLevel = Number(previous?.breakout_level ?? 0);
-  let a = analyze(candles, timeframeConfiguration, {
-    referenceLevel: tracksExistingLevel && previousLevel > 0 ? previousLevel : undefined,
-    quoteVolume24h: Number(symbol.quote_volume_24h ?? 0),
-  });
+  let triggeredBreakoutQuality = Number(previous?.breakout_quality_score ?? 0);
+  // The live row may have been rescored by an older deployment while it was in
+  // retest, which erased its quality. The immutable breakout event is the
+  // canonical source for the trigger candle and also repairs those journeys on
+  // their next scan.
+  if (tracksExistingLevel && previous?.journey_id) {
+    const { data: triggerEvent, error: triggerEventError } = await supabase
+      .from("signal_journey_events")
+      .select("breakout_quality_score")
+      .eq("breakout_signal_id", previous.id)
+      .eq("journey_id", previous.journey_id)
+      .eq("status", "breakout_detected")
+      .order("candle_close_time", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (triggerEventError) throw triggerEventError;
+    if (Number(triggerEvent?.breakout_quality_score ?? 0) > 0) {
+      triggeredBreakoutQuality = Number(triggerEvent.breakout_quality_score);
+    }
+  }
+  let a = engineKind === "ema_cross"
+    ? analyze(candles, timeframeConfiguration, {
+      referenceLevel: tracksExistingLevel && previousLevel > 0 ? previousLevel : undefined,
+      quoteVolume24h: Number(symbol.quote_volume_24h ?? 0),
+    })
+    : analyzeLevelBreakout(
+      candles,
+      engineKind as BreakoutEngineKind,
+      timeframeConfiguration,
+      timeframe,
+      {
+        referenceLevel: tracksExistingLevel && previousLevel > 0 ? previousLevel : undefined,
+        quoteVolume24h: Number(symbol.quote_volume_24h ?? 0),
+        btcScore: btc.score,
+        status: previousStatus,
+        period: Number(timeframeConfiguration.donchianPeriod),
+      },
+    );
   const candleClose = new Date(a.current.closeTime).toISOString();
   const isNewCandle = !previous?.candle_close_time || new Date(previous.candle_close_time).getTime() !== a.current.closeTime;
-  const trackedLevel = previousLevel > 0 ? previousLevel : a.level;
+  const trackedLevel = tracksExistingLevel && previousLevel > 0 ? previousLevel : a.level;
   const oldStateStartedAt = String(previousFacts.stateStartedAt ?? candleClose);
   const oldJourneyStartedAt = String(
     previousFacts.journeyStartedAt ??
       (previousStatus === "breakout_detected" || previousStatus === "confirmed" || previousStatus === "retest" ? oldStateStartedAt : candleClose),
   );
   const journeyAge = Math.max(0, Math.floor((a.current.closeTime - new Date(oldJourneyStartedAt).getTime()) / timeframeMilliseconds[timeframe]));
-  const status = nextSignalState(previousStatus, a, trackedLevel, journeyAge, isNewCandle);
-  a = applySignalState(a, status);
+  const status = engineKind === "ema_cross"
+    ? nextSignalState(previousStatus, a, trackedLevel, journeyAge, isNewCandle)
+    : nextLevelSignalState(previousStatus, a, trackedLevel, journeyAge, isNewCandle);
+  let directional: DirectionalFactor[] = [];
+  if (engineKind === "ema_cross") {
+    a = applySignalState(a, status, btc.score);
+  } else {
+    a = applyBreakoutStateScores(
+      a,
+      status,
+      btc.score,
+      tracksExistingLevel ? triggeredBreakoutQuality : 0,
+    );
+    // Bearish deductions subtract from the quality score. An active journey
+    // keeps its trigger-candle quality untouched, exactly like the base score
+    // does — and the factor rows freeze with it, so the score and the rows
+    // that explain it always describe the same candle.
+    const qualityPinned = tracksExistingLevel && triggeredBreakoutQuality > 0 &&
+      (status === "breakout_detected" || status === "retest" || status === "confirmed");
+    if (qualityPinned) {
+      directional = Array.isArray(previousFacts.confidenceFactors)
+        ? previousFacts.confidenceFactors
+        : [];
+    } else {
+      directional = directionalFactors(candles);
+      a.scores.breakoutQualityScore = applyDirectionalAdjustment(
+        a.scores.breakoutQualityScore,
+        directional,
+      );
+    }
+    a = {
+      ...a,
+      confidence: a.scores.breakoutQualityScore,
+      risk: Math.max(0, 100 - a.scores.breakoutQualityScore),
+    };
+  }
+  const scoreLayers = engineKind === "ema_cross"
+    ? {
+      regimeScore: a.setupScore,
+      readinessScore: a.setupScore,
+      breakoutQualityScore: a.confidence,
+      confirmationScore: status === "confirmed" ? 100 : status === "retest" ? 60 : status === "breakout_detected" ? 35 : 0,
+      breakoutTriggered: status === "breakout_detected" || status === "retest" || status === "confirmed",
+    }
+    : a.scores;
   const previousWasTerminal = previousStatus === "failed" || previousStatus === "expired";
   const beginsNewJourney = previousWasTerminal && status !== "failed" && status !== "expired";
   const journeyID = beginsNewJourney || !previous?.journey_id ? crypto.randomUUID() : String(previous.journey_id);
@@ -391,7 +593,7 @@ async function scanEMA(
     : status === "confirmed" || status === "retest" || status === "breakout_detected"
     ? oldJourneyStartedAt
     : candleClose;
-  const breakoutLevel = tracksExistingLevel ? trackedLevel : a.donchianLevel;
+  const breakoutLevel = tracksExistingLevel ? trackedLevel : a.level;
   const explanation =
     `${symbol.symbol} ${timeframe} ${model.display_name}: setup ${a.setupType} ${a.setupScore}/100, breakout quality ${a.confidence}/100, false-breakout risk ${a.risk}/100. ADX ${a.adx.toFixed(1)}, +DI ${a.plusDI.toFixed(1)}, -DI ${a.minusDI.toFixed(1)}, volume ${a.volumeRatio.toFixed(1)}x. State: ${status}.`;
   const payload = {
@@ -408,6 +610,12 @@ async function scanEMA(
     candle_close_time: candleClose,
     is_candle_closed: true,
     breakout_confidence_score: a.confidence,
+    regime_score: scoreLayers.regimeScore,
+    readiness_score: scoreLayers.readinessScore,
+    breakout_quality_score: scoreLayers.breakoutQualityScore,
+    confirmation_score: scoreLayers.confirmationScore,
+    breakout_triggered: scoreLayers.breakoutTriggered,
+    scoring_version: "breakout-scores-v1",
     false_breakout_risk: a.risk,
     market_activity_score: a.activity,
     volume_ratio: a.volumeRatio,
@@ -421,6 +629,7 @@ async function scanEMA(
       market: "spot",
       model: model.slug,
       modelDisplayName: model.display_name,
+      engineKind,
       analysisModelID: model.id,
       timeframe,
       candleClosed: true,
@@ -461,10 +670,18 @@ async function scanEMA(
       minusDI: a.minusDI,
       bollingerBandWidthChangePercent: a.bollingerBandWidthChange,
       quoteVolume24h: Number(symbol.quote_volume_24h ?? 0),
+      btcStrength: btcStrengthFacts(btc),
+      scoreLayers: {
+        ...scoreLayers,
+        scoringVersion: "breakout-scores-v1",
+      },
       scoreComponents: a.scoreComponents,
       // The unified score's own ingredients — this list sums to
       // breakout_confidence_score, which is what the detail page explains.
-      confidenceFactors: emaConfidenceFactors(a, status),
+      // Level engines list the directional evidence that adjusted quality.
+      confidenceFactors: engineKind === "ema_cross"
+        ? emaConfidenceFactors(a, status, btc.score)
+        : directional.map(({ key, score, maxScore }) => ({ key, score, maxScore })),
     },
   };
   const signal = previous?.id
@@ -507,7 +724,7 @@ Deno.serve(async (req) => {
     }
     const { data: modelRows, error: modelError } = await supabase
       .from("analysis_models")
-      .select("id,slug,display_name,scoring_configuration_id")
+      .select("id,slug,display_name,engine_kind,scoring_configuration_id")
       .eq("is_active", true)
       .order("sort_order");
     if (modelError) throw modelError;
@@ -525,6 +742,17 @@ Deno.serve(async (req) => {
     }));
     if (models.some((model: any) => !model.configuration)) {
       throw new Error("An active analysis model has no scoring configuration.");
+    }
+    for (const model of models) {
+      const engineKind = String(model.engine_kind ?? "");
+      const supported = engineKind === "ema_cross" || engineKind === "double_pattern" ||
+        LEVEL_BREAKOUT_ENGINES.has(engineKind as BreakoutEngineKind);
+      if (!supported) {
+        throw new Error(`Unsupported engine_kind '${engineKind}' on model '${model.slug}'.`);
+      }
+      if (engineKind === "double_pattern" && !DOUBLE_PATTERN_DIRECTIONS[model.slug]) {
+        throw new Error(`Double-pattern direction is not declared for '${model.slug}'.`);
+      }
     }
     const { data: symbols, error: symbolError } = await supabase
       .from("symbols")
@@ -551,6 +779,18 @@ Deno.serve(async (req) => {
       batchSlot = Math.min(SCAN_BATCH_SLOTS - 1, Math.max(0, Number(body.batchSlot)));
       candidates = scanBatch(universe, batchSlot);
     }
+    // One BTC series per run feeds every symbol's strength-vs-BTC factor. If
+    // the fetch fails, every coin scores the neutral midpoint rather than the
+    // whole scan failing over one ingredient.
+    let btcCandles: MarketCandle[] = [];
+    try {
+      btcCandles = await fetchClosedCandles("BTCUSDT", timeframe);
+    } catch (error) {
+      console.error("btc_candles_failed", {
+        timeframe,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
     for (let offset = 0; offset < candidates.length; offset += 8) {
       const batch = candidates.slice(offset, offset + 8);
       const results = await Promise.all(batch.map(async (symbol: any) => {
@@ -560,14 +800,24 @@ Deno.serve(async (req) => {
           // needs deep history. Gating per model keeps recently listed coins
           // covered on the timeframes where 250 candles simply do not exist yet.
           if (candles.length < 30) return 0;
+          // BTC is its own benchmark, so it scores the neutral midpoint.
+          const observation = symbol.symbol === "BTCUSDT"
+            ? null
+            : btcStrengthObservation(candles, btcCandles);
+          const btc: BTCStrengthInput = {
+            score: observation?.score ?? NEUTRAL_BTC_STRENGTH,
+            observation,
+          };
           let completedModels = 0;
           for (const model of models) {
             try {
-              if (DOUBLE_PATTERN_DIRECTIONS[model.slug]) {
-                await scanDoublePattern(supabase, model, symbol, timeframe, candles);
-              } else {
+              if (model.engine_kind === "double_pattern") {
+                await scanDoublePattern(supabase, model, symbol, timeframe, candles, btc);
+              } else if (model.engine_kind === "ema_cross" || LEVEL_BREAKOUT_ENGINES.has(model.engine_kind)) {
                 if (candles.length < 250) continue;
-                await scanEMA(supabase, model, symbol, timeframe, candles);
+                await scanIndicatorModel(supabase, model, symbol, timeframe, candles, btc);
+              } else {
+                throw new Error(`Unsupported engine_kind '${model.engine_kind}'.`);
               }
               completedModels += 1;
             } catch (error) {

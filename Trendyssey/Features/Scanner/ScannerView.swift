@@ -2,12 +2,16 @@ import SwiftUI
 
 struct ScannerView: View {
     private enum SortOption: String, CaseIterable, Identifiable {
-        case confidence, volume, change
+        case stageScore, regime, readiness, quality, confirmation, volume, change
 
         var id: Self { self }
         var title: String {
             switch self {
-            case .confidence: L10n.text("Confidence score", "Güven puanı")
+            case .stageScore: L10n.text("Current-stage score", "Aşama puanı")
+            case .regime: L10n.text("Regime", "Rejim")
+            case .readiness: L10n.text("Readiness", "Hazırlık")
+            case .quality: L10n.text("Breakout quality", "Kırılım kalitesi")
+            case .confirmation: L10n.text("Confirmation", "Teyit")
             case .volume: L10n.text("24h volume", "24s hacim")
             case .change: L10n.text("24h change", "24s değişim")
             }
@@ -25,20 +29,28 @@ struct ScannerView: View {
     @State private var selectedSignal: MarketSignal?
     @State private var isLoading = true
     @State private var statusFilter: SignalStatus?
-    @State private var sortOption: SortOption = .confidence
+    @State private var sortOption: SortOption = .stageScore
     @AppStorage("preferredTimeframe") private var preferredTimeframe = "15m"
-    @AppStorage(JourneyModel.storageKey) private var journeyModel = JourneyModel.emaCross.rawValue
+    @AppStorage(JourneyModel.storageKey) private var journeyModel = JourneyModel.donchian20.rawValue
 
     private var journeyDirection: JourneyDirection {
-        (JourneyModel(rawValue: journeyModel) ?? .emaCross).direction
+        (JourneyModel(rawValue: journeyModel) ?? .donchian20).direction
     }
 
     // Filters and sorting run on the server-recorded phase and score — the
     // same values the rows display and the pushes were sent from.
     private func phase(for signal: MarketSignal) -> SignalStatus { signal.status }
 
-    private func confidence(for signal: MarketSignal) -> Int {
-        signal.hasScore ? signal.confidence : 0
+    private func score(for signal: MarketSignal, option: SortOption) -> Int {
+        guard signal.hasScore else { return 0 }
+        return switch option {
+        case .stageScore: signal.stageScore
+        case .regime: signal.regimeScore
+        case .readiness: signal.readinessScore
+        case .quality: signal.breakoutQualityScore
+        case .confirmation: signal.confirmationScore
+        case .volume, .change: 0
+        }
     }
 
     private var signals: [MarketSignal] {
@@ -50,10 +62,10 @@ struct ScannerView: View {
             return matchesQuery && matchesStatus
         }
         switch sortOption {
-        case .confidence:
+        case .stageScore, .regime, .readiness, .quality, .confirmation:
             return filtered.sorted {
-                let lhs = confidence(for: $0)
-                let rhs = confidence(for: $1)
+                let lhs = score(for: $0, option: sortOption)
+                let rhs = score(for: $1, option: sortOption)
                 if lhs != rhs { return lhs > rhs }
                 if $0.quoteVolume24h != $1.quoteVolume24h { return $0.quoteVolume24h > $1.quoteVolume24h }
                 return $0.symbol < $1.symbol

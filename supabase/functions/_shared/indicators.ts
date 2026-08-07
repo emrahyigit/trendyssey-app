@@ -2,6 +2,13 @@
 // bundle so the repo owns the source that is running in production.
 // deno-lint-ignore-file no-explicit-any
 
+import {
+  BTC_STRENGTH_MAX_SCORE,
+  NEUTRAL_BTC_STRENGTH,
+  WEAK_BTC_CONFIDENCE_CAP,
+  WEAK_BTC_STRENGTH,
+} from "./relative_strength.ts";
+
 export interface MarketCandle {
   openTime: number;
   open: number;
@@ -554,12 +561,18 @@ export function analyze(candles: MarketCandle[], inputConfiguration: unknown, co
   };
 }
 
-/// The scored ingredients of the unified EMA crossover confidence, shared with
-/// the on-device Swift engine: alignment 25 + cross freshness 15 + retest 15 +
-/// volume 20 + long-term 15 + momentum 10. Stored on the signal's evidence so
-/// the app's "why this score" list always sums to the score it explains.
-export function emaConfidenceFactors(a: any, state: string): Array<{ key: string; score: number; maxScore: number }> {
-  const alignment = a.emaFast > a.emaSlow && a.emaSlow > a.emaLong ? 25 : a.emaFast > a.emaSlow ? 14 : 2;
+/// The scored ingredients of the unified EMA crossover confidence: alignment 20
+/// + cross freshness 15 + retest 15 + volume 15 + long-term 15 + momentum 5 +
+/// strength vs BTC 15 = 100. Stored on the signal's evidence so the app's "why
+/// this score" list always sums to the score it explains. `btcScore` comes from
+/// relative_strength.ts; when the observation is unavailable the neutral
+/// midpoint is used so missing data never punishes a coin.
+export function emaConfidenceFactors(
+  a: any,
+  state: string,
+  btcScore?: number | null,
+): Array<{ key: string; score: number; maxScore: number }> {
+  const alignment = a.emaFast > a.emaSlow && a.emaSlow > a.emaLong ? 20 : a.emaFast > a.emaSlow ? 11 : 2;
   const inJourney = state === "breakout_detected" || state === "retest" || state === "confirmed";
   let cross = 0;
   if (inJourney) {
@@ -571,28 +584,37 @@ export function emaConfidenceFactors(a: any, state: string): Array<{ key: string
   else if (state === "retest") retest = 8;
   else if (state === "breakout_detected" || state === "confirmed") retest = 4;
   const vr = a.volumeRatio;
-  const volume = vr >= 2 ? 20 : vr >= 1.5 ? 15 : vr >= 1 ? 11 : vr >= 0.7 ? 6 : 2;
+  const volume = vr >= 2 ? 15 : vr >= 1.5 ? 11 : vr >= 1 ? 8 : vr >= 0.7 ? 5 : 2;
   const longTerm = a.current.close > a.emaLong ? (a.emaLongRising ? 15 : 10) : 2;
   const streak = a.closesAboveFastStreak;
-  const momentum = streak >= 3 ? 10 : streak === 2 ? 7 : streak === 1 ? 4 : 0;
+  const momentum = streak >= 3 ? 5 : streak === 2 ? 3 : streak === 1 ? 2 : 0;
+  const btcStrength = Math.min(
+    BTC_STRENGTH_MAX_SCORE,
+    Math.max(0, Math.round(btcScore ?? NEUTRAL_BTC_STRENGTH)),
+  );
   return [
-    { key: "alignment", score: alignment, maxScore: 25 },
+    { key: "alignment", score: alignment, maxScore: 20 },
     { key: "cross", score: cross, maxScore: 15 },
     { key: "retest", score: retest, maxScore: 15 },
-    { key: "volume", score: volume, maxScore: 20 },
+    { key: "volume", score: volume, maxScore: 15 },
     { key: "longTerm", score: longTerm, maxScore: 15 },
-    { key: "momentum", score: momentum, maxScore: 10 },
+    { key: "momentum", score: momentum, maxScore: 5 },
+    { key: "btcStrength", score: btcStrength, maxScore: BTC_STRENGTH_MAX_SCORE },
   ];
 }
 
 /// The unified score is the sum of its stored ingredients, so the two can
-/// never drift apart.
-export function emaConfidence(a: any, state: string): number {
-  const total = emaConfidenceFactors(a, state).reduce((sum, factor) => sum + factor.score, 0);
-  return Math.min(100, Math.max(0, total));
+/// never drift apart. A coin measurably weaker than BTC is capped below the
+/// high-confidence band: its breakout may just be the BTC tide.
+export function emaConfidence(a: any, state: string, btcScore?: number | null): number {
+  const total = emaConfidenceFactors(a, state, btcScore).reduce((sum, factor) => sum + factor.score, 0);
+  const capped = (btcScore ?? NEUTRAL_BTC_STRENGTH) <= WEAK_BTC_STRENGTH
+    ? Math.min(total, WEAK_BTC_CONFIDENCE_CAP)
+    : total;
+  return Math.min(100, Math.max(0, capped));
 }
 
-export function applySignalState(analysis: any, state: string): any {
+export function applySignalState(analysis: any, state: string, btcScore?: number | null): any {
   const components = analysis.scoreComponents.map((item: any) => ({ ...item }));
   const confirmation = components.find((item: any) => item.key === "confidence.confirmation");
   const stateRisk = components.find((item: any) => item.key === "risk.state");
@@ -619,7 +641,7 @@ export function applySignalState(analysis: any, state: string): any {
   confirmation.normalizedValue = confirmation.maximumScore === 0 ? 0 : round(confirmation.contribution / confirmation.maximumScore);
   stateRisk.normalizedValue = stateRisk.maximumScore === 0 ? 0 : round(stateRisk.contribution / stateRisk.maximumScore);
   // Confidence comes from the unified EMA crossover model shared with the app.
-  const confidence = emaConfidence(analysis, state);
+  const confidence = emaConfidence(analysis, state, btcScore);
   return {
     ...analysis,
     confidence,

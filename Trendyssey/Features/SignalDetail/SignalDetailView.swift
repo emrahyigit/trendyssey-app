@@ -7,19 +7,28 @@ struct SignalDetailView: View {
     let signal: MarketSignal
     @State private var candles: [PriceCandle] = []
     @State private var analysis: JourneyAnalysis?
+    @State private var chartOverlay = JourneyChartOverlay.empty
     @State private var chartError = false
+    @State private var characterBadges: [MarketCharacterEntry] = []
+    @State private var showQualityDeductions = false
     @AppStorage("preferredTimeframe") private var preferredTimeframe = "15m"
-    @AppStorage(JourneyModel.storageKey) private var journeyModel = JourneyModel.emaCross.rawValue
+    @AppStorage(JourneyModel.storageKey) private var journeyModel = JourneyModel.donchian20.rawValue
 
     private static let overlayColors: [String: Color] = [
         "ema7": TrendysseyColor.binanceYellow,
         "ema25": Color(red: 0.91, green: 0.42, blue: 0.66),
         "ema99": Color(red: 0.62, green: 0.49, blue: 0.92),
+        "donchianUpper": TrendysseyColor.accent,
+        "breakoutLevel": TrendysseyColor.accent,
+        "horizontalResistance": TrendysseyColor.accent,
+        "rangeUpper": TrendysseyColor.accent,
+        "rangeLower": Color(red: 0.28, green: 0.66, blue: 0.88),
         "neckline": TrendysseyColor.accent,
         "patternBase": Color(red: 0.62, green: 0.49, blue: 0.92),
     ]
 
-    private var selectedModel: JourneyModel { JourneyModel(rawValue: journeyModel) ?? .emaCross }
+    private var selectedModel: JourneyModel { JourneyModel(rawValue: journeyModel) ?? .donchian20 }
+    private var selectedTimeframe: AnalysisTimeframe { AnalysisTimeframe(rawValue: preferredTimeframe) ?? .m15 }
     private var currentPhase: SignalStatus { analysis?.currentPhase ?? signal.status }
     private var direction: JourneyDirection { analysis?.direction ?? selectedModel.direction }
 
@@ -35,7 +44,10 @@ struct SignalDetailView: View {
                 HStack(spacing: 10) {
                     SymbolMark(symbol: signal.baseSymbol, iconURL: signal.iconURL)
                     VStack(alignment: .leading) {
-                        Text(signal.symbol).font(.title2.bold())
+                        Text(signal.symbol)
+                            .font(.title2.bold())
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.6)
                         if liveAnalysisAllowed {
                             Text(currentPhase.title(direction))
                                 .font(.subheadline)
@@ -58,12 +70,21 @@ struct SignalDetailView: View {
                 } else {
                     SurfaceCard { proTeaser }
                 }
+                if !characterBadges.isEmpty {
+                    SurfaceCard { characterBadgesCard }
+                }
                 SurfaceCard { CoinChatPreview(symbol: signal.symbol, journeyID: signal.journeyID, journeyPhase: currentPhase) }
             }.padding(18)
         }.background(TrendysseyColor.canvas.ignoresSafeArea()).navigationBarTitleDisplayMode(.inline)
             .task(id: "\(signal.symbol)-\(preferredTimeframe)-\(journeyModel)") {
+                let requestedModel = selectedModel
+                let requestedTimeframe = selectedTimeframe
+                analysis = nil
+                chartOverlay = .empty
+                characterBadges = []
+                Task { await loadCharacterBadges(timeframe: requestedTimeframe) }
                 while !Task.isCancelled {
-                    await loadCandles()
+                    await loadCandles(model: requestedModel, timeframe: requestedTimeframe)
                     try? await Task.sleep(for: .seconds(5))
                 }
             }
@@ -82,7 +103,7 @@ struct SignalDetailView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var exchange: PreferredExchange { PreferredExchange.selected }
+    private var exchange: PreferredExchange { .binance }
 
     private var binanceLink: some View {
         Button(action: openInExchange) {
@@ -134,7 +155,7 @@ struct SignalDetailView: View {
 
     @ViewBuilder private var candleChart: some View {
         if candles.isEmpty && !chartError {
-            ProgressView(L10n.text("Loading \(AnalysisTimeframe.selected.title) candles…", "\(AnalysisTimeframe.selected.title) mumları yükleniyor…")).frame(maxWidth: .infinity).frame(height: 220)
+            ProgressView(L10n.text("Loading \(selectedTimeframe.title) candles…", "\(selectedTimeframe.title) mumları yükleniyor…")).frame(maxWidth: .infinity).frame(height: 220)
         } else if chartError {
             ContentUnavailableView(L10n.text("Chart unavailable", "Grafik yüklenemedi"), systemImage: "chart.xyaxis.line", description: Text(L10n.text("Close and reopen the page to retry.", "Yeniden denemek için sayfayı kapatıp açabilirsin.")))
                 .frame(height: 220)
@@ -145,7 +166,7 @@ struct SignalDetailView: View {
                         .font(.headline)
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
-                    Text("(\(AnalysisTimeframe.selected.rawValue.uppercased()))")
+                    Text("(\(selectedTimeframe.rawValue.uppercased()))")
                         .font(.caption.bold())
                         .foregroundStyle(TrendysseyColor.secondaryText)
                     HStack(alignment: .center, spacing: 4) {
@@ -188,7 +209,7 @@ struct SignalDetailView: View {
                         .foregroundStyle(Self.overlayColor(point.series))
                         .lineStyle(StrokeStyle(lineWidth: 1.4))
                     }
-                    ForEach(analysis?.levels ?? []) { level in
+                    ForEach(chartOverlay.levels) { level in
                         RuleMark(y: .value(level.title, level.price))
                             .foregroundStyle(Self.overlayColor(level.key))
                             .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
@@ -210,12 +231,12 @@ struct SignalDetailView: View {
     }
 
     @ViewBuilder private var chartLegend: some View {
-        if let analysis {
+        if !chartOverlay.series.isEmpty || !chartOverlay.levels.isEmpty {
             HStack(spacing: 12) {
-                ForEach(analysis.series) { series in
+                ForEach(chartOverlay.series) { series in
                     overlayLegend(series.title, Self.overlayColor(series.key), dashed: false)
                 }
-                ForEach(analysis.levels) { level in
+                ForEach(chartOverlay.levels) { level in
                     overlayLegend(level.title, Self.overlayColor(level.key), dashed: true)
                 }
             }
@@ -246,7 +267,7 @@ struct SignalDetailView: View {
 
     private var visibleCandles: [PriceCandle] {
         let minimumWindow = 48
-        guard let earliestMarker = analysis?.markers.map(\.time).min() else {
+        guard let earliestMarker = chartOverlay.markers.map(\.time).min() else {
             return Array(candles.suffix(minimumWindow))
         }
         let sinceMarker = candles.filter { $0.openTime >= earliestMarker }.count
@@ -254,10 +275,10 @@ struct SignalDetailView: View {
     }
 
     private var seriesPoints: [OverlayPoint] {
-        guard let analysis, let windowStart = visibleCandles.first?.openTime else { return [] }
+        guard let windowStart = visibleCandles.first?.openTime else { return [] }
         var points: [OverlayPoint] = []
-        for series in analysis.series {
-            for (index, candle) in analysis.candles.enumerated() where candle.openTime >= windowStart {
+        for series in chartOverlay.series {
+            for (index, candle) in candles.enumerated() where candle.openTime >= windowStart {
                 if index < series.values.count, let value = series.values[index] {
                     points.append(OverlayPoint(time: candle.openTime, value: value, series: series.key))
                 }
@@ -267,8 +288,8 @@ struct SignalDetailView: View {
     }
 
     private var visibleMarkers: [JourneyMarker] {
-        guard let analysis, let windowStart = visibleCandles.first?.openTime else { return [] }
-        return analysis.markers.filter { $0.time >= windowStart }
+        guard let windowStart = visibleCandles.first?.openTime else { return [] }
+        return chartOverlay.markers.filter { $0.time >= windowStart }
     }
 
     private static func overlayColor(_ key: String) -> Color {
@@ -278,7 +299,7 @@ struct SignalDetailView: View {
     private var chartDomain: ClosedRange<Double> {
         let visible = visibleCandles
         let overlayValues = seriesPoints.map(\.value)
-            + (analysis?.levels.map(\.price) ?? [])
+            + chartOverlay.levels.map(\.price)
             + visibleMarkers.map(\.price)
         let lows = visible.map(\.low) + overlayValues
         let highs = visible.map(\.high) + overlayValues
@@ -287,26 +308,43 @@ struct SignalDetailView: View {
         return (low - padding)...(high + padding)
     }
 
-    @MainActor private func loadCandles() async {
+    @MainActor private func loadCandles(model: JourneyModel, timeframe: AnalysisTimeframe) async {
         do {
-            // The chart is the one deliberate Binance surface: live candles,
-            // including the forming one. Everything analytical — phase, score,
-            // factors, overlays, journey — is still read from the server,
-            // which is the only place it is computed.
             let fetched = try await CandleService().liveChartCandles(
                 for: signal.symbol,
-                interval: AnalysisTimeframe.selected.rawValue,
-                limit: 100
+                interval: timeframe.rawValue,
+                // EMA 99 needs enough warm-up candles to span the full
+                // 48-candle viewport instead of appearing as a tiny tail.
+                limit: 160
             )
+            guard !Task.isCancelled, model == selectedModel, timeframe == selectedTimeframe else { return }
             candles = fetched
+            // EMA/channel lines are display-only and use the same live Binance
+            // candles as the chart. Server evidence is merged in below when it
+            // arrives, but sparse snapshot history can no longer blank the UI.
+            chartOverlay = ChartOverlayService.overlay(
+                model: model,
+                candles: fetched,
+                serverAnalysis: nil
+            )
+            chartError = false
+
+            var serverAnalysis: JourneyAnalysis?
             if liveAnalysisAllowed, !fetched.isEmpty {
-                analysis = await ServerAnalysisService.shared.analysis(
+                serverAnalysis = await ServerAnalysisService.shared.analysis(
                     for: signal,
-                    model: selectedModel,
+                    model: model,
+                    timeframe: timeframe.rawValue,
                     candles: fetched
                 )
             }
-            chartError = false
+            guard !Task.isCancelled, model == selectedModel, timeframe == selectedTimeframe else { return }
+            analysis = serverAnalysis
+            chartOverlay = ChartOverlayService.overlay(
+                model: model,
+                candles: fetched,
+                serverAnalysis: serverAnalysis
+            )
         } catch { if candles.isEmpty { chartError = true } }
     }
 
@@ -374,13 +412,95 @@ struct SignalDetailView: View {
         }
     }
 
-    // MARK: - Confidence
+    // MARK: - Character badges
+
+    private var characterBadgesCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Label(L10n.text("Character Badges", "Karakter Rozetleri"), systemImage: "rosette")
+                .font(.headline)
+            ForEach(characterBadges) { badge in
+                HStack(spacing: 11) {
+                    Image(systemName: badge.category.systemImage)
+                        .font(.subheadline)
+                        .foregroundStyle(badge.category.tint)
+                        .frame(width: 34, height: 34)
+                        .background(badge.category.tint.opacity(0.12), in: Circle())
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(badge.category.badgeTitle)
+                            .font(.subheadline.weight(.semibold))
+                        Text(badgeDetail(badge))
+                            .font(.caption)
+                            .foregroundStyle(TrendysseyColor.secondaryText)
+                            .lineLimit(2)
+                            .minimumScaleFactor(0.8)
+                    }
+                    Spacer(minLength: 8)
+                    Text(badgeValue(badge))
+                        .font(.headline.bold()).monospacedDigit()
+                        .foregroundStyle(badge.category.tint)
+                }
+                .accessibilityElement(children: .combine)
+            }
+            Text(L10n.text(
+                "From the last 30 days of \(selectedModel.title) journeys on \(selectedTimeframe.title) candles. Badges are technical labels, not advice.",
+                "Kapanmış \(selectedTimeframe.title) mumlarında son 30 günün \(selectedModel.title) yolculuklarından. Rozetler teknik etikettir; tavsiye değildir."
+            ))
+            .font(.caption2).foregroundStyle(TrendysseyColor.secondaryText).lineSpacing(2)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func badgeDetail(_ badge: MarketCharacterEntry) -> String {
+        switch badge.category {
+        case .successful:
+            L10n.text(
+                "\(badge.successCount)/\(badge.sampleCount) breakouts completed · \(badge.category.badgeSummary)",
+                "\(badge.successCount)/\(badge.sampleCount) kırılım tamamlandı · \(badge.category.badgeSummary)"
+            )
+        case .disappointing:
+            L10n.text(
+                "\(badge.failureCount)/\(badge.sampleCount) breakouts invalidated · \(badge.category.badgeSummary)",
+                "\(badge.failureCount)/\(badge.sampleCount) kırılım geçersiz · \(badge.category.badgeSummary)"
+            )
+        case .overheated, .depressed:
+            badge.category.badgeSummary
+        }
+    }
+
+    private func badgeValue(_ badge: MarketCharacterEntry) -> String {
+        switch badge.category {
+        case .successful, .disappointing:
+            "\(badge.score.formatted(.number.precision(.fractionLength(0...1)).locale(L10n.locale)))%"
+        case .overheated, .depressed:
+            badge.score.formatted(.number.precision(.fractionLength(0)).locale(L10n.locale))
+        }
+    }
+
+    @MainActor private func loadCharacterBadges(timeframe: AnalysisTimeframe) async {
+        let rankings = (try? await MarketCharacterService.shared.rankings(
+            modelSlug: AnalysisModelSelection.selectedSlug,
+            timeframe: timeframe.rawValue
+        )) ?? []
+        guard timeframe == selectedTimeframe else { return }
+        characterBadges = rankings.filter { $0.symbol == signal.symbol }
+    }
+
+    // MARK: - Breakout scores
 
     @ViewBuilder private var confidenceCard: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Label(L10n.text("Confidence Score", "Güven Puanı"), systemImage: "gauge.with.needle")
+            Label(L10n.text("Breakout Scores", "Kırılım Puanları"), systemImage: "gauge.with.needle")
                 .font(.headline)
             if let analysis {
+                if let scores = analysis.scoreLayers {
+                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                        scoreLayerTile(L10n.text("Regime", "Rejim"), scores.regimeScore)
+                        scoreLayerTile(L10n.text("Readiness", "Hazırlık"), scores.readinessScore)
+                        scoreLayerTile(L10n.text("Breakout quality", "Kırılım kalitesi"), scores.breakoutQualityScore)
+                        scoreLayerTile(L10n.text("Confirmation", "Teyit"), scores.confirmationScore)
+                    }
+                    Divider()
+                }
                 HStack(alignment: .firstTextBaseline) {
                     Text("\(analysis.confidence)").font(.system(size: 52, weight: .bold, design: .rounded)).monospacedDigit()
                         + Text(" / 100").font(.subheadline).foregroundColor(TrendysseyColor.secondaryText)
@@ -401,8 +521,9 @@ struct SignalDetailView: View {
                 }
                 .frame(height: 6)
                 Divider()
-                Text(L10n.text("Why this score?", "Bu puan neden verildi?")).font(.subheadline.bold())
+                Text(L10n.text("How were these scores formed?", "Bu puanlar nasıl oluştu?")).font(.subheadline.bold())
                 ForEach(analysis.factors) { factor in factorRow(factor) }
+                directionalEvidenceSection(analysis)
                 Text(L10n.text("Data is a statistical assessment, not investment advice.", "Veriler istatistiksel değerlendirmedir; yatırım tavsiyesi değildir."))
                     .font(.caption2).foregroundStyle(TrendysseyColor.secondaryText)
             } else if chartError {
@@ -413,6 +534,75 @@ struct SignalDetailView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Quality deductions: only the bearish warnings that actually fired, each
+    /// as the points it subtracted. There are no bullish bonuses — the base
+    /// score is earned by the breakout candle itself. When nothing fired the
+    /// section is absent.
+    @ViewBuilder private func directionalEvidenceSection(_ analysis: JourneyAnalysis) -> some View {
+        let active = analysis.directionalFactors
+            .map { factor in (factor: factor, deduction: factor.score - factor.maxScore) }
+            .filter { $0.deduction < 0 }
+        let net = active.reduce(0) { $0 + $1.deduction }
+        let quality = analysis.scoreLayers?.breakoutQualityScore ?? 0
+        // Current signals store quality with deductions already applied, so the
+        // arrow reconstructs the base: "83 → 66". Signals recorded before
+        // deductions froze with the trigger would reconstruct an impossible
+        // base above 100; for those the arrow starts from the pinned score
+        // instead and reads as today's reassessment: "95 → 82".
+        let arrow: (from: Int, to: Int) = quality - net <= 100
+            ? (quality - net, quality)
+            : (quality, quality + net)
+        if !active.isEmpty {
+            DisclosureGroup(isExpanded: $showQualityDeductions) {
+                VStack(alignment: .leading, spacing: 9) {
+                    ForEach(active, id: \.factor.key) { entry in
+                        HStack(alignment: .top, spacing: 9) {
+                            Image(systemName: "arrow.down.circle.fill")
+                                .foregroundStyle(TrendysseyColor.negative)
+                                .font(.caption)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(entry.factor.title).font(.caption.bold())
+                                Text(entry.factor.detail)
+                                    .font(.caption2).foregroundStyle(TrendysseyColor.secondaryText)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            Spacer(minLength: 8)
+                            // "-7/12": 7 of a possible 12 points deducted.
+                            Text("\(entry.deduction)/\(entry.factor.maxScore)")
+                                .font(.caption.bold()).monospacedDigit()
+                                .foregroundStyle(TrendysseyColor.negative)
+                                .padding(.horizontal, 7).padding(.vertical, 4)
+                                .background(TrendysseyColor.negative.opacity(0.10), in: Capsule())
+                        }
+                    }
+                }
+                .padding(.top, 8)
+            } label: {
+                HStack(spacing: 8) {
+                    Text(L10n.text("Quality deductions", "Kalite kesintileri"))
+                        .font(.caption.bold())
+                        .foregroundStyle(TrendysseyColor.primaryText)
+                    Spacer(minLength: 8)
+                    if quality > 0 {
+                        Text("\(arrow.from) → \(arrow.to)")
+                            .font(.caption.bold()).monospacedDigit()
+                            .foregroundStyle(TrendysseyColor.negative)
+                    }
+                }
+            }
+        }
+    }
+
+    private func scoreLayerTile(_ title: String, _ score: Int) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title).font(.caption2.bold()).foregroundStyle(TrendysseyColor.secondaryText)
+            Text("\(score) / 100").font(.headline).monospacedDigit()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(TrendysseyColor.elevated, in: RoundedRectangle(cornerRadius: 12))
     }
 
     private func factorRow(_ factor: ConfidenceFactor) -> some View {

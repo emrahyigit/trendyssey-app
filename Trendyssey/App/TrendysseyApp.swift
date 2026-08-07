@@ -8,6 +8,15 @@ struct TrendysseyApp: App {
     @AppStorage("appLanguage") private var appLanguage = AppLanguage.default.rawValue
     @AppStorage("themeMode") private var themeMode = AppThemeMode.system.rawValue
 
+    init() {
+        // EMA Cross was retired as a selectable breakout model. Existing
+        // installs move to the new production default instead of requesting an
+        // inactive backend slug while still showing the old picker label.
+        if UserDefaults.standard.string(forKey: JourneyModel.storageKey) == JourneyModel.emaCross.rawValue {
+            UserDefaults.standard.set(JourneyModel.donchian20.rawValue, forKey: JourneyModel.storageKey)
+        }
+    }
+
     var body: some Scene {
         WindowGroup {
             AccessGateView()

@@ -25,6 +25,11 @@ struct LiveMarketService: MarketService {
         let signal_price: Double
         let signal_time: Date
         let breakout_confidence_score: Int
+        let regime_score: Int?
+        let readiness_score: Int?
+        let breakout_quality_score: Int?
+        let confirmation_score: Int?
+        let breakout_triggered: Bool?
         let false_breakout_risk: Int
         let market_activity_score: Int
         let volume_ratio: Double?
@@ -35,13 +40,14 @@ struct LiveMarketService: MarketService {
         let symbols: Symbol
     }
 
-    // The server sweeps the whole enabled universe, so no client-side cap:
-    // every coin with a signal row shows its server phase and score.
+    // The scanner analyzes the current top-100 eligible pairs. Applying the
+    // same boundary here prevents a stale row from an older top-100 membership
+    // (including a legacy scoring version) from appearing as a live score.
     func overview() async throws -> MarketOverview {
-        try await loadSignals(includeWatching: true, universeLimit: nil)
+        try await loadSignals(includeWatching: true, universeLimit: 100)
     }
     func allSymbols() async throws -> [MarketSignal] {
-        let analyzed = try await loadSignals(includeWatching: true, universeLimit: nil).signals
+        let analyzed = try await loadSignals(includeWatching: true, universeLimit: 100).signals
         let bySymbol = Dictionary(uniqueKeysWithValues: analyzed.map { ($0.symbol, $0) })
         return try await activeSymbols().map { symbol in
             bySymbol[symbol.symbol] ?? MarketSignal(id: symbol.id, symbol: symbol.symbol, name: symbol.base_asset, iconURL: symbol.icon_url, price: symbol.current_price ?? 0, change24h: symbol.price_change_percent_24h ?? 0, quoteVolume24h: symbol.quote_volume_24h ?? 0, confidence: 0, falseBreakoutRisk: 100, activityScore: 0, volumeRatio: 0, takerBuyRatio: 0.5, estimatedDelta: 0, status: .watching, signalDate: .distantPast, explanation: L10n.text("Not enough volume to analyze. Only the 100 highest-volume coins are analyzed; you can still add this coin to favorites.", "Analiz için yeterli hacim yok. Sadece hacmi en yüksek 100 coin analiz edilir; bu coini yine de favorilere ekleyebilirsin."), hasScore: false)
@@ -51,7 +57,7 @@ struct LiveMarketService: MarketService {
     private func loadSignals(includeWatching: Bool, universeLimit: Int?) async throws -> MarketOverview {
         var components = URLComponents(url: SupabaseConfig.projectURL.appending(path: "rest/v1/breakout_signals"), resolvingAgainstBaseURL: false)!
         components.queryItems = [
-            .init(name: "select", value: "id,journey_id,status,signal_price,signal_time,breakout_confidence_score,false_breakout_risk,market_activity_score,volume_ratio,estimated_volume_delta,taker_buy_ratio,explanation,explanation_facts,analysis_models!inner(slug),symbols(symbol,base_asset,icon_url,current_price,price_change_percent_24h,quote_volume_24h)"),
+            .init(name: "select", value: "id,journey_id,status,signal_price,signal_time,breakout_confidence_score,regime_score,readiness_score,breakout_quality_score,confirmation_score,breakout_triggered,false_breakout_risk,market_activity_score,volume_ratio,estimated_volume_delta,taker_buy_ratio,explanation,explanation_facts,analysis_models!inner(slug),symbols(symbol,base_asset,icon_url,current_price,price_change_percent_24h,quote_volume_24h)"),
             .init(name: "order", value: "signal_time.desc"),
             .init(name: "timeframe", value: "eq.\(AnalysisTimeframe.selected.rawValue)"),
             .init(name: "analysis_models.slug", value: "eq.\(AnalysisModelSelection.selectedSlug)"),
@@ -68,7 +74,7 @@ struct LiveMarketService: MarketService {
         let selectedUniverse = universeLimit.map { Array(active.prefix($0)) } ?? active
         let universe = Set(selectedUniverse.map(\.symbol))
         let mapped = rows.filter { universe.contains($0.symbols.symbol) }.map { row in
-            MarketSignal(id: row.id, journeyID: row.journey_id, symbol: row.symbols.symbol, name: row.symbols.base_asset, iconURL: row.symbols.icon_url, price: row.symbols.current_price ?? row.signal_price, change24h: row.symbols.price_change_percent_24h ?? 0, quoteVolume24h: row.symbols.quote_volume_24h ?? 0, confidence: row.breakout_confidence_score, falseBreakoutRisk: row.false_breakout_risk, activityScore: row.market_activity_score, volumeRatio: row.volume_ratio ?? 0, takerBuyRatio: row.taker_buy_ratio ?? 0.5, estimatedDelta: row.estimated_volume_delta ?? 0, status: status(row.status), signalDate: row.signal_time, explanation: row.explanation, evidence: row.explanation_facts)
+            MarketSignal(id: row.id, journeyID: row.journey_id, symbol: row.symbols.symbol, name: row.symbols.base_asset, iconURL: row.symbols.icon_url, price: row.symbols.current_price ?? row.signal_price, change24h: row.symbols.price_change_percent_24h ?? 0, quoteVolume24h: row.symbols.quote_volume_24h ?? 0, confidence: row.breakout_quality_score ?? row.breakout_confidence_score, regimeScore: row.regime_score ?? row.explanation_facts?.scoreLayers?.regimeScore ?? 0, readinessScore: row.readiness_score ?? row.explanation_facts?.scoreLayers?.readinessScore ?? 0, breakoutQualityScore: row.breakout_quality_score ?? row.breakout_confidence_score, confirmationScore: row.confirmation_score ?? row.explanation_facts?.scoreLayers?.confirmationScore ?? 0, breakoutTriggered: row.breakout_triggered ?? row.explanation_facts?.scoreLayers?.breakoutTriggered ?? false, falseBreakoutRisk: row.false_breakout_risk, activityScore: row.market_activity_score, volumeRatio: row.volume_ratio ?? 0, takerBuyRatio: row.taker_buy_ratio ?? 0.5, estimatedDelta: row.estimated_volume_delta ?? 0, status: status(row.status), signalDate: row.signal_time, explanation: row.explanation, evidence: row.explanation_facts)
         }
         var seenSymbols = Set<String>()
         let signals = mapped
