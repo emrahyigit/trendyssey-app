@@ -78,6 +78,9 @@ actor JourneyBacktestService {
                             readinessScore: analysis.scoreLayers?.readinessScore ?? analysis.confidence,
                             breakoutQualityScore: analysis.scoreLayers?.breakoutQualityScore ?? analysis.confidence,
                             confirmationScore: analysis.scoreLayers?.confirmationScore ?? fallbackConfirmation,
+                            // The device replay has no BTC series; unmeasured
+                            // entries pass the relative-strength filter.
+                            relativeStrengthScore: nil,
                             falseBreakoutRisk: max(0, 100 - analysis.confidence),
                             volumeRatio: analysis.volumeRatio,
                             quoteVolume24h: volumeBySymbol[symbol] ?? 0,
@@ -85,7 +88,7 @@ actor JourneyBacktestService {
                             latestPrice: observed.last?.close ?? event.price,
                             maximumObservedPrice: observed.map(\.high).max() ?? event.price,
                             minimumObservedPrice: observed.map(\.low).min() ?? event.price,
-                            entryDate: event.time,
+                            entryDate: event.time.ceiledToSecond,
                             observedCandles: observed
                         )
                     )

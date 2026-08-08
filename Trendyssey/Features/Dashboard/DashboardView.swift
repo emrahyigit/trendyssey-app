@@ -3,14 +3,15 @@ import SwiftUI
 struct DashboardView: View {
     @Environment(AppEnvironment.self) private var environment
     @State private var store = DashboardStore()
-    @State private var selectedCharacterCategory = MarketCharacterCategory.successful
     @AppStorage("preferredTimeframe") private var preferredTimeframe = "15m"
     @AppStorage(JourneyModel.storageKey) private var journeyModel = JourneyModel.donchian20.rawValue
 
-    /// A featured breakout has to clear this. Without it the section fills with
-    /// coins that are technically in a breakout phase but scored so low that the
-    /// move carries no weight.
-    private static let minimumStageScore = 50
+    /// A featured breakout has to clear this signal strength. Unmeasured coins
+    /// do not qualify — at a bar this high, "no data" is not "strong".
+    private static let minimumStageScore = 80
+
+    /// Waiting-list coins must also show real strength before they earn a row.
+    private static let minimumWaitingStrength = 70
 
     /// Phases that mean the breakout is under way: it started, it is being
     /// retested, or it strengthened.
@@ -19,7 +20,6 @@ struct DashboardView: View {
     // Lists filter on the same server-recorded phase and score the cards
     // display, so selection and display always agree.
     private func phase(for signal: MarketSignal) -> SignalStatus { signal.status }
-    private func stageScore(for signal: MarketSignal) -> Int { signal.stageScore }
 
     var body: some View {
         ScrollView {
@@ -85,65 +85,31 @@ struct DashboardView: View {
     }
 
     @ViewBuilder private func content(_ overview: MarketOverview) -> some View {
-        // Featured = the breakout is under way, it scored well enough to be worth
-        // surfacing, and the biggest money is shown first.
+        // Featured = the breakout is under way, its signal strength clears the
+        // 80 bar, its recent breakouts were not mostly fake-outs, and the
+        // biggest money is shown first.
         let breakouts = overview.signals
             .filter { Self.breakoutPhases.contains(phase(for: $0)) }
-            .filter { stageScore(for: $0) >= Self.minimumStageScore }
+            .filter { ($0.relativeStrengthScore ?? 0) >= Self.minimumStageScore }
+            .filter { !store.isHighInvalidation($0.symbol) }
             .sorted { $0.quoteVolume24h > $1.quoteVolume24h }
-        let waiting = overview.signals.filter { phase(for: $0) == .preBreakout }
-        let topVolume50 = Array(
-            overview.signals
-                .filter(\.hasScore)
-                .sorted { $0.quoteVolume24h > $1.quoteVolume24h }
-                .prefix(50)
-        )
-        // Regime/readiness describe the liquid market universe, while quality
-        // and confirmation describe active breakout journeys. Build those two
-        // cohorts independently so a valid breakout is not dropped merely
-        // because it sits outside the top-50 volume slice.
-        let activeBreakouts = overview.signals.filter(isActiveBreakout)
-        let averages = averageMetrics(
-            marketSignals: topVolume50,
-            breakoutSignals: activeBreakouts
-        )
-        VStack(alignment: .leading, spacing: 9) {
-            Text(L10n.text("MODEL SCORE AVERAGES", "MODEL PUAN ORTALAMALARI"))
-                .font(.caption2.bold()).foregroundStyle(TrendysseyColor.secondaryText)
-            HStack(spacing: 0) {
-                compactAverage(L10n.text("REGIME", "REJİM"), averages.regime)
-                averageDivider
-                compactAverage(L10n.text("READINESS", "HAZIRLIK"), averages.readiness)
-                averageDivider
-                compactAverage(L10n.text("QUALITY", "KALİTE"), averages.quality)
-                averageDivider
-                compactAverage(L10n.text("CONFIRM", "TEYİT"), averages.confirmation)
-            }
-            .padding(.vertical, 12)
-            .background(TrendysseyColor.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(TrendysseyColor.border, lineWidth: 1)
-            }
-            Text(L10n.text(
-                "Regime/readiness: \(averages.allCount) high-volume coins · Quality/confirmation: \(averages.breakoutCount) active breakout coins",
-                "Rejim/hazırlık: yüksek hacimli \(averages.allCount) coin · Kalite/teyit: aktif kırılımdaki \(averages.breakoutCount) coin"
-            ))
-            .font(.caption2).foregroundStyle(TrendysseyColor.secondaryText)
-        }
+        let waiting = overview.signals
+            .filter { phase(for: $0) == .preBreakout }
+            .filter { ($0.relativeStrengthScore ?? 0) >= Self.minimumWaitingStrength }
+            .filter { !store.isHighInvalidation($0.symbol) }
         VStack(alignment: .leading, spacing: 12) {
             sectionTitle(
                 L10n.text("Featured Breakouts", "Öne Çıkan Kırılımlar"),
                 subtitle: L10n.text(
-                    "Current-stage score \(Self.minimumStageScore)+ on closed \(AnalysisTimeframe.selected.title) candles, highest 24h volume first",
-                    "Kapanmış \(AnalysisTimeframe.selected.title) mumlarında \(Self.minimumStageScore)+ aşama puanı, en yüksek 24s hacim önce"
+                    "Signal strength \(Self.minimumStageScore)+ on closed \(AnalysisTimeframe.selected.title) candles, highest 24h volume first. Coins with over 75% of recent breakouts invalidated are hidden.",
+                    "Kapanmış \(AnalysisTimeframe.selected.title) mumlarında \(Self.minimumStageScore)+ sinyal gücü, en yüksek 24s hacim önce. Son kırılımlarının %75'inden fazlası geçersiz kalan coinler gizlenir."
                 )
             )
             if breakouts.isEmpty {
                 emptyRow(
                     L10n.text(
-                        "No breakout has a current-stage score of \(Self.minimumStageScore) or above right now",
-                        "Şu anda aşama puanı \(Self.minimumStageScore) ve üzeri olan kırılım yok"
+                        "No breakout has a signal strength of \(Self.minimumStageScore) or above right now",
+                        "Şu anda sinyal gücü \(Self.minimumStageScore) ve üzeri olan kırılım yok"
                     ),
                     icon: "chart.line.uptrend.xyaxis"
                 )
@@ -170,15 +136,13 @@ struct DashboardView: View {
                 }
             }
         }
-        MarketCharactersSection(
-            entries: store.marketCharacters,
-            signals: overview.signals,
-            selection: $selectedCharacterCategory
-        )
         VStack(alignment: .leading, spacing: 12) {
             sectionTitle(
                 L10n.text("Waiting for Breakout", "Kırılım Beklenenler"),
-                subtitle: L10n.text("Conditions are monitored until a closed candle clears the level", "Kapanmış mum seviyeyi geçene kadar koşullar izleniyor")
+                subtitle: L10n.text(
+                    "Signal strength \(Self.minimumWaitingStrength)+ while conditions are monitored until a closed candle clears the level. High-invalidation coins are hidden.",
+                    "Sinyal gücü \(Self.minimumWaitingStrength)+ olan coinler; kapanmış mum seviyeyi geçene kadar izlenir. Geçersizlik oranı yüksek coinler gizlenir."
+                )
             )
             if waiting.isEmpty {
                 emptyRow(L10n.text("No coin is waiting for a breakout right now", "Şu anda kırılım beklenen coin yok"), icon: "scope")
@@ -188,51 +152,45 @@ struct DashboardView: View {
                 }
             }
         }
+        VStack(alignment: .leading, spacing: 12) {
+            sectionTitle(
+                L10n.text("Top 10 Predictors", "En İyi 10 Tahminci"),
+                subtitle: L10n.text("Ranked by verified breakout call accuracy", "Doğrulanmış kırılım tahmini isabetine göre sıralanır")
+            )
+            if store.topPredictors.isEmpty {
+                emptyRow(
+                    L10n.text("The board fills as breakout predictions resolve", "Kırılım tahminleri sonuçlandıkça liste dolacak"),
+                    icon: "person.2"
+                )
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(Array(store.topPredictors.prefix(10).enumerated()), id: \.element.id) { index, predictor in
+                        HStack(spacing: 12) {
+                            Text("#\(index + 1)")
+                                .font(.subheadline.bold()).monospacedDigit()
+                                .foregroundStyle(index < 3 ? TrendysseyColor.accent : TrendysseyColor.secondaryText)
+                                .frame(width: 34, alignment: .leading)
+                            Text(predictor.displayName)
+                                .font(.subheadline.weight(.semibold)).lineLimit(1)
+                            Spacer(minLength: 8)
+                            Text(L10n.text("\(predictor.accuracy)%", "%\(predictor.accuracy)"))
+                                .font(.subheadline.bold()).monospacedDigit()
+                                .foregroundStyle(predictor.accuracy >= 60 ? TrendysseyColor.positive : TrendysseyColor.secondaryText)
+                            Text(L10n.text("\(predictor.resolvedCount) calls", "\(predictor.resolvedCount) tahmin"))
+                                .font(.caption2).monospacedDigit()
+                                .foregroundStyle(TrendysseyColor.secondaryText)
+                                .frame(width: 70, alignment: .trailing)
+                        }
+                        .padding(.horizontal, 15).padding(.vertical, 11)
+                        if predictor.id != store.topPredictors.prefix(10).last?.id { Divider().padding(.leading, 15) }
+                    }
+                }
+                .background(TrendysseyColor.surface, in: RoundedRectangle(cornerRadius: 18))
+            }
+        }
         disclaimer
     }
 
-    private func compactAverage(_ title: String, _ value: String) -> some View {
-        VStack(spacing: 4) {
-            Text(value)
-                .font(.title3.bold())
-                .monospacedDigit()
-                .foregroundStyle(TrendysseyColor.primaryText)
-            Text(title)
-                .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(TrendysseyColor.secondaryText)
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-        }
-        .frame(maxWidth: .infinity)
-        .accessibilityElement(children: .combine)
-    }
-
-    private var averageDivider: some View {
-        Divider()
-            .frame(height: 36)
-    }
-    private func averageMetrics(
-        marketSignals: [MarketSignal],
-        breakoutSignals: [MarketSignal]
-    ) -> (regime: String, readiness: String, quality: String, confirmation: String, allCount: Int, breakoutCount: Int) {
-        func average(_ keyPath: KeyPath<MarketSignal, Int>, in cohort: [MarketSignal]) -> String {
-            guard !cohort.isEmpty else { return "—" }
-            let value = cohort.reduce(0.0) { $0 + Double($1[keyPath: keyPath]) } / Double(cohort.count)
-            return "\(Int(value.rounded()))"
-        }
-
-        return (
-            average(\.regimeScore, in: marketSignals),
-            average(\.readinessScore, in: marketSignals),
-            average(\.breakoutQualityScore, in: breakoutSignals),
-            average(\.confirmationScore, in: breakoutSignals),
-            marketSignals.count,
-            breakoutSignals.count
-        )
-    }
-    private func isActiveBreakout(_ signal: MarketSignal) -> Bool {
-        signal.hasScore && signal.breakoutTriggered && Self.breakoutPhases.contains(signal.status)
-    }
     private func sectionTitle(_ title: String, subtitle: String) -> some View { VStack(alignment: .leading, spacing: 3) { Text(title).font(.title3.bold()); Text(subtitle).font(.caption).foregroundStyle(TrendysseyColor.secondaryText) } }
     private func emptyRow(_ text: String, icon: String) -> some View { Label(text, systemImage: icon).font(.subheadline).foregroundStyle(TrendysseyColor.secondaryText).frame(maxWidth: .infinity, alignment: .leading).padding(18).background(TrendysseyColor.surface, in: RoundedRectangle(cornerRadius: 18)) }
     private var disclaimer: some View { Label(L10n.text("Data is a statistical assessment, not investment advice.", "Veriler istatistiksel değerlendirmedir; yatırım tavsiyesi değildir."), systemImage: "info.circle").font(.caption).foregroundStyle(TrendysseyColor.secondaryText).padding(.horizontal, 4) }

@@ -56,6 +56,8 @@ import {
   type BTCStrengthObservation,
   btcStrengthObservation,
   NEUTRAL_BTC_STRENGTH,
+  type RelativeStrengthObservation,
+  relativeStrengthObservation,
 } from "../_shared/relative_strength.ts";
 
 const supportedTimeframes = new Set(["15m", "1h", "4h", "1d"]);
@@ -114,6 +116,28 @@ function patternActivityScore(volumeRatio: number): number {
 interface BTCStrengthInput {
   score: number;
   observation: BTCStrengthObservation | null;
+  /** Detail of the ~24h excess-return read; null when unmeasurable. */
+  relativeStrength: RelativeStrengthObservation | null;
+  /**
+   * The scalar the database ranks into the 0-100 percentile: excess log
+   * return vs BTC. Exactly 0 for BTC itself; null only when candles could
+   * not be aligned. The percentile is NOT computed here — one batch cannot
+   * see the whole universe, refresh_relative_strength() can.
+   */
+  relativeStrengthRaw: number | null;
+}
+
+/** Evidence block explaining the relative-strength scalar. */
+function relativeStrengthFacts(btc: BTCStrengthInput): Record<string, unknown> {
+  return {
+    excessReturn: btc.relativeStrengthRaw,
+    winRate: btc.relativeStrength?.winRate ?? null,
+    coinReturn: btc.relativeStrength?.coinReturn ?? null,
+    btcReturn: btc.relativeStrength?.btcReturn ?? null,
+    windowCandles: btc.relativeStrength?.windowCandles ?? null,
+    samples: btc.relativeStrength?.samples ?? 0,
+    unmeasured: btc.relativeStrengthRaw === null,
+  };
 }
 
 /** Evidence block explaining the btcStrength factor, or why it is neutral. */
@@ -256,6 +280,8 @@ async function scanDoublePattern(
     readiness_score: scoreLayers.readinessScore,
     breakout_quality_score: confidence,
     confirmation_score: scoreLayers.confirmationScore,
+    relative_strength_raw: btc.relativeStrengthRaw,
+    relative_strength_win_rate: symbol.symbol === "BTCUSDT" ? 0.5 : btc.relativeStrength?.winRate ?? null,
     breakout_triggered: scoreLayers.breakoutTriggered,
     scoring_version: scoreLayers.scoringVersion,
     false_breakout_risk: risk,
@@ -304,6 +330,7 @@ async function scanDoublePattern(
         directionalScore: directionalMarketScore,
         direction,
       },
+      relativeStrength: relativeStrengthFacts(btc),
       scoreLayers,
       confidenceFactors: factors,
     },
@@ -614,6 +641,8 @@ async function scanIndicatorModel(
     readiness_score: scoreLayers.readinessScore,
     breakout_quality_score: scoreLayers.breakoutQualityScore,
     confirmation_score: scoreLayers.confirmationScore,
+    relative_strength_raw: btc.relativeStrengthRaw,
+    relative_strength_win_rate: symbol.symbol === "BTCUSDT" ? 0.5 : btc.relativeStrength?.winRate ?? null,
     breakout_triggered: scoreLayers.breakoutTriggered,
     scoring_version: "breakout-scores-v1",
     false_breakout_risk: a.risk,
@@ -671,6 +700,7 @@ async function scanIndicatorModel(
       bollingerBandWidthChangePercent: a.bollingerBandWidthChange,
       quoteVolume24h: Number(symbol.quote_volume_24h ?? 0),
       btcStrength: btcStrengthFacts(btc),
+      relativeStrength: relativeStrengthFacts(btc),
       scoreLayers: {
         ...scoreLayers,
         scoringVersion: "breakout-scores-v1",
@@ -764,6 +794,7 @@ Deno.serve(async (req) => {
     if (symbolError) throw symbolError;
     let scanned = 0;
     let signals = 0;
+    const sampleErrors: string[] = [];
     // Only the 100 highest-volume pairs are analyzed at all; everything below
     // that line is out of the universe and the app reports it as not having
     // enough volume to analyze.
@@ -804,9 +835,15 @@ Deno.serve(async (req) => {
           const observation = symbol.symbol === "BTCUSDT"
             ? null
             : btcStrengthObservation(candles, btcCandles);
+          const relativeStrength = symbol.symbol === "BTCUSDT"
+            ? null
+            : relativeStrengthObservation(candles, btcCandles, timeframe);
           const btc: BTCStrengthInput = {
             score: observation?.score ?? NEUTRAL_BTC_STRENGTH,
             observation,
+            relativeStrength,
+            // BTC moves one-to-one with itself, so its scalar is exactly 0.
+            relativeStrengthRaw: symbol.symbol === "BTCUSDT" ? 0 : relativeStrength?.excessReturn ?? null,
           };
           let completedModels = 0;
           for (const model of models) {
@@ -821,11 +858,9 @@ Deno.serve(async (req) => {
               }
               completedModels += 1;
             } catch (error) {
-              console.error("scan_model_symbol_failed", {
-                model: model.slug,
-                symbol: symbol.symbol,
-                message: error instanceof Error ? error.message : String(error),
-              });
+              const message = error instanceof Error ? error.message : JSON.stringify(error);
+              if (sampleErrors.length < 3) sampleErrors.push(`${model.slug}/${symbol.symbol}: ${message}`);
+              console.error("scan_model_symbol_failed", { model: model.slug, symbol: symbol.symbol, message });
             }
           }
           if (completedModels > 0) {
@@ -836,15 +871,25 @@ Deno.serve(async (req) => {
           }
           return completedModels;
         } catch (error) {
-          console.error("scan_symbol_failed", {
-            symbol: symbol.symbol,
-            message: error instanceof Error ? error.message : String(error),
-          });
+          const message = error instanceof Error ? error.message : String(error);
+          if (sampleErrors.length < 3) sampleErrors.push(`${symbol.symbol}: ${message}`);
+          console.error("scan_symbol_failed", { symbol: symbol.symbol, message });
           return 0;
         }
       }));
       scanned += results.filter((count) => count > 0).length;
       signals += results.reduce((total, count) => total + count, 0);
+    }
+    // Every batch just wrote its coins' relative-strength scalars; rank the
+    // freshest scalar per symbol into the 0-100 percentile the app displays.
+    // Parallel batch slots each call this — the last one leaves the final
+    // ranking, and re-running it is free.
+    const refresh = await supabase.rpc("refresh_relative_strength", { p_timeframe: timeframe });
+    if (refresh.error) {
+      console.error("relative_strength_refresh_failed", {
+        timeframe,
+        message: refresh.error.message,
+      });
     }
     return json({
       data: {
@@ -856,6 +901,7 @@ Deno.serve(async (req) => {
         batchSlot,
         scanned,
         signals,
+        sampleErrors,
         generatedAt: new Date().toISOString(),
       },
     });

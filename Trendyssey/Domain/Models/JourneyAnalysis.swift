@@ -19,7 +19,7 @@ enum JourneyModel: String, CaseIterable, Identifiable, Sendable {
     nonisolated static var selected: JourneyModel {
         guard let raw = UserDefaults.standard.string(forKey: storageKey),
               let model = JourneyModel(rawValue: raw),
-              selectableCases.contains(model) else { return .donchian20 }
+              selectableCases.contains(model) else { return .emaCross }
         return model
     }
 
@@ -28,8 +28,11 @@ enum JourneyModel: String, CaseIterable, Identifiable, Sendable {
     /// Double Bottom/Top were retired as standalone models the same way: they
     /// live on as directional evidence inside every level engine's quality
     /// score instead of running their own journeys.
+    /// Narrowed to the EMA 7/25/99 crossover alone; model choice left the UI.
+    /// The other engines remain decodable for history — widen this list to
+    /// bring the choice back.
     nonisolated static let selectableCases: [JourneyModel] = [
-        .donchian20, .donchian50, .horizontalLevel, .consolidation,
+        .emaCross,
     ]
 
     var id: String { rawValue }
@@ -46,7 +49,7 @@ enum JourneyModel: String, CaseIterable, Identifiable, Sendable {
     /// only for models with a slug here; the others run on the device alone.
     nonisolated var serverSlug: String? {
         switch self {
-        case .emaCross: "gpt-5-6-sol-v1"
+        case .emaCross: "ema-7-25-99-v1"
         case .donchian20: "donchian-20-v1"
         case .donchian50: "donchian-50-v1"
         case .horizontalLevel: "horizontal-level-v1"

@@ -55,6 +55,8 @@ actor UserSyncService {
         let minimumReadinessScore: Int
         let minimumBreakoutQualityScore: Int
         let minimumConfirmationScore: Int
+        let minimumSignalStrength: Int
+        let minimumSuccessRate: Int
         let maximumRisk: Int
         let minimumVolumeRatio: Double
         let minimumQuoteVolume24h: Double
@@ -101,6 +103,8 @@ actor UserSyncService {
             minimumReadinessScore: defaults.integer(forKey: "notificationMinimumReadinessScore"),
             minimumBreakoutQualityScore: minimumQuality,
             minimumConfirmationScore: defaults.integer(forKey: "notificationMinimumConfirmationScore"),
+            minimumSignalStrength: defaults.integer(forKey: "notificationMinimumSignalStrength"),
+            minimumSuccessRate: defaults.integer(forKey: "notificationMinimumSuccessRate"),
             maximumRisk: 100,
             minimumVolumeRatio: 0.0,
             minimumQuoteVolume24h: Double(defaults.integer(forKey: "notificationMinimumVolumeMillions")) * 1_000_000,

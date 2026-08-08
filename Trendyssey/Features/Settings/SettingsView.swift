@@ -12,6 +12,8 @@ struct SettingsView: View {
     @AppStorage(JourneyModel.storageKey) private var journeyModel = JourneyModel.donchian20.rawValue
     @AppStorage("notificationStatuses") private var notificationStatuses = "preBreakout,breakoutDetected,confirmed,retest,failed,expired"
     @AppStorage("notificationScope") private var notificationScope = "favorites"
+    @AppStorage("notificationMinimumSignalStrength") private var notificationMinimumSignalStrength = 0
+    @AppStorage("notificationMinimumSuccessRate") private var notificationMinimumSuccessRate = 0
     @AppStorage("notificationMinimumRegimeScore") private var notificationMinimumRegimeScore = 0
     @AppStorage("notificationMinimumReadinessScore") private var notificationMinimumReadinessScore = 0
     // Keep the legacy key so existing installs preserve their quality threshold.
@@ -93,12 +95,7 @@ struct SettingsView: View {
                     }
                 }
             }
-            Section(L10n.text("ANALYSIS MODEL", "ANALİZ MODELİ")) {
-                Picker(L10n.text("Model", "Model"), selection: $journeyModel) {
-                    ForEach(JourneyModel.selectableCases) { model in
-                        Text(model.title).tag(model.rawValue)
-                    }
-                }
+            Section(L10n.text("ANALYSIS", "ANALİZ")) {
                 Picker(L10n.text("Timeframe", "Zaman dilimi"), selection: $preferredTimeframe) {
                     ForEach(AnalysisTimeframe.allCases) { timeframe in
                         Text(timeframe.title).tag(timeframe.rawValue)
@@ -111,7 +108,7 @@ struct SettingsView: View {
                     proAnalysisLabel(L10n.text("Breakout scenario", "Kırılım senaryosu"))
                 }
             }
-            Section(L10n.text("NOTIFICATIONS & FILTERS", "BİLDİRİM VE FİLTRELER")) {
+            Section(L10n.text("NOTIFICATIONS", "BİLDİRİMLER")) {
                 if !environment.subscriptionStore.isSubscribed {
                     NavigationLink { SubscriptionView() } label: {
                         Label(L10n.text("Unlock Pro alerts and filters", "Pro uyarıları ve filtreleri aç"), systemImage: "lock.fill")
@@ -132,42 +129,19 @@ struct SettingsView: View {
                 }
                 .pickerStyle(.segmented)
                 .disabled(!environment.subscriptionStore.isSubscribed)
-                DisclosureGroup {
-                    notificationScoreStepper(
-                        L10n.text("Minimum regime", "Minimum rejim"),
-                        value: $notificationMinimumRegimeScore
-                    )
-                    notificationScoreStepper(
-                        L10n.text("Minimum readiness", "Minimum hazırlık"),
-                        value: $notificationMinimumReadinessScore
-                    )
-                    notificationScoreStepper(
-                        L10n.text("Minimum breakout quality", "Minimum kırılım kalitesi"),
-                        value: $notificationMinimumBreakoutQualityScore
-                    )
-                    notificationScoreStepper(
-                        L10n.text("Minimum confirmation", "Minimum teyit"),
-                        value: $notificationMinimumConfirmationScore
-                    )
-                    Text(L10n.text(
-                        "All four enabled thresholds must pass. Scores that do not apply yet are 0; leave later-stage thresholds at 0 to receive early alerts.",
-                        "Etkin dört eşiğin tamamı geçilmelidir. Henüz oluşmayan aşamaların puanı 0'dır; erken uyarılar için sonraki aşama eşiklerini 0 bırak."
-                    ))
-                    .font(.caption2).foregroundStyle(TrendysseyColor.secondaryText)
-                } label: {
-                    LabeledContent(
-                        L10n.text("Score thresholds", "Puan eşikleri"),
-                        value: L10n.text(
-                            "R\(notificationMinimumRegimeScore) · Rd\(notificationMinimumReadinessScore) · Q\(notificationMinimumBreakoutQualityScore) · C\(notificationMinimumConfirmationScore)",
-                            "R\(notificationMinimumRegimeScore) · H\(notificationMinimumReadinessScore) · K\(notificationMinimumBreakoutQualityScore) · T\(notificationMinimumConfirmationScore)"
-                        )
-                    )
-                }
+                notificationScoreStepper(
+                    L10n.text("Min. signal strength", "Min. sinyal gücü"),
+                    value: $notificationMinimumSignalStrength
+                )
+                notificationScoreStepper(
+                    L10n.text("Min. success rate", "Min. başarı oranı"),
+                    value: $notificationMinimumSuccessRate
+                )
                 .disabled(!environment.subscriptionStore.isSubscribed)
                 Stepper(
                     L10n.text(
-                        "Minimum 24h volume: \(notificationMinimumVolumeText)",
-                        "Minimum 24s hacim: \(notificationMinimumVolumeText)"
+                        "Min. 24h volume: \(notificationMinimumVolumeText)",
+                        "Min. 24s hacim: \(notificationMinimumVolumeText)"
                     ),
                     value: $notificationMinimumVolumeMillions,
                     in: 0...100,

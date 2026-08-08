@@ -6,17 +6,25 @@ struct DailyBreakoutSimulatorView: View {
     @State private var scenarioModel = JourneyModel.selected
     @State private var preferredTimeframe = AnalysisTimeframe.selected.rawValue
     @State private var lookback = ScenarioLookback.day1
-    @State private var investment = 1_000.0
+    /// Fixed scenario stake — the page asks one question with one number.
+    private let investment = 100_000.0
     @State private var minimumDivide = 5
-    @State private var profitTarget = 5.0
-    @State private var minimumRegime = 50
-    @State private var minimumReadiness = 50
-    @State private var minimumBreakoutQuality = 50
-    @State private var minimumConfirmation = 50
+    @State private var profitTarget = 10.0
+    @State private var stopLoss = 10.0
+    /// Positions may stay open at most this long; at the deadline they close at
+    /// market, profit or loss.
+    @State private var maxOpenHours = 24
+    /// 0 disables the filter. Entries recorded before the score shipped carry
+    /// no value and always pass.
+    @State private var minimumRelativeStrength = 0
+    /// Coins whose 30-day breakout success rate sits below this are skipped,
+    /// mirroring the dashboard's protection against serial fake-out coins.
+    @State private var minimumSuccessRate = 50
+    /// 30-day per-coin track record, keyed by symbol, for the success filter.
+    @State private var journeyStats: [String: SymbolJourneyStats] = [:]
     /// Minimum 24h quote volume in millions of dollars; 0 disables the filter.
     @State private var minimumVolumeMillions = 10
     @State private var entryStatus: SignalStatus = .breakoutDetected
-    @State private var isScoreThresholdsExpanded = false
     @State private var entries: [BreakoutScenarioEntry] = []
     @State private var isTruncated = false
     /// True when the entries were recomputed here because the backend had none.
@@ -28,7 +36,7 @@ struct DailyBreakoutSimulatorView: View {
 
     private struct SimulatedTrade: Identifiable {
         let entry: BreakoutScenarioEntry
-        let saleDate: Date?
+        let exit: ScenarioExit?
 
         var id: UUID { entry.id }
     }
@@ -43,20 +51,24 @@ struct DailyBreakoutSimulatorView: View {
         entries.filter { $0.quoteVolume24h >= minimumQuoteVolume }
     }
 
-    private var regimeEligibleEntries: [BreakoutScenarioEntry] {
-        volumeEligibleEntries.filter { $0.regimeScore >= minimumRegime }
-    }
-
-    private var readinessEligibleEntries: [BreakoutScenarioEntry] {
-        regimeEligibleEntries.filter { $0.readinessScore >= minimumReadiness }
-    }
-
-    private var qualityEligibleEntries: [BreakoutScenarioEntry] {
-        readinessEligibleEntries.filter { $0.breakoutQualityScore >= minimumBreakoutQuality }
+    /// The dashboard's fake-out shield, applied to the replay: a coin whose
+    /// 30-day success rate is below the threshold is skipped. Coins without
+    /// enough history (fewer than 4 breakouts) pass — absence of data is not
+    /// evidence of a bad coin.
+    private var successEligibleEntries: [BreakoutScenarioEntry] {
+        volumeEligibleEntries.filter { entry in
+            guard let stats = journeyStats[entry.symbol],
+                  stats.startedCount >= 4,
+                  let successRate = stats.successRatePercent else { return true }
+            return successRate >= Double(minimumSuccessRate)
+        }
     }
 
     private var eligibleEntries: [BreakoutScenarioEntry] {
-        qualityEligibleEntries.filter { $0.confirmationScore >= minimumConfirmation }
+        successEligibleEntries.filter { entry in
+            guard minimumRelativeStrength > 0, let strength = entry.relativeStrengthScore else { return true }
+            return strength >= minimumRelativeStrength
+        }
     }
 
     private var scenarioDirection: JourneyDirection { scenarioModel.direction }
@@ -80,16 +92,16 @@ struct DailyBreakoutSimulatorView: View {
                 "Giriş var ancak tüm coinlerin hacmi \(minimumVolumeText) çizgisinin altında."
             )
         }
-        if regimeEligibleEntries.isEmpty {
-            return L10n.text("No entry reaches regime \(minimumRegime).", "Hiçbir giriş \(minimumRegime) rejim puanına ulaşmıyor.")
+        if successEligibleEntries.isEmpty {
+            return L10n.text(
+                "Every remaining coin's 30-day success rate is below \(minimumSuccessRate)%.",
+                "Kalan tüm coinlerin 30 günlük başarı oranı %\(minimumSuccessRate) altında."
+            )
         }
-        if readinessEligibleEntries.isEmpty {
-            return L10n.text("No entry reaches readiness \(minimumReadiness).", "Hiçbir giriş \(minimumReadiness) hazırlık puanına ulaşmıyor.")
-        }
-        if qualityEligibleEntries.isEmpty {
-            return L10n.text("No entry reaches breakout quality \(minimumBreakoutQuality).", "Hiçbir giriş \(minimumBreakoutQuality) kırılım kalitesine ulaşmıyor.")
-        }
-        return L10n.text("No entry reaches confirmation \(minimumConfirmation).", "Hiçbir giriş \(minimumConfirmation) teyit puanına ulaşmıyor.")
+        return L10n.text(
+            "No entry reaches signal strength \(minimumRelativeStrength).",
+            "Hiçbir giriş \(minimumRelativeStrength) sinyal gücüne ulaşmıyor."
+        )
     }
 
     private var simulatedTrades: [SimulatedTrade] {
@@ -110,27 +122,33 @@ struct DailyBreakoutSimulatorView: View {
                 return releaseDate <= entry.entryDate
             }
             guard activeSlots.count < minimumDivide else { continue }
-            let saleDate = entry.targetHitDate(profitTarget: profitTarget)
-            accepted.append(SimulatedTrade(entry: entry, saleDate: saleDate))
-            activeSlots.append(SlotOccupation(releaseDate: saleDate))
+            let exit = entry.exit(profitTarget: profitTarget, stopLoss: stopLoss, maxOpenHours: maxOpenHours)
+            accepted.append(SimulatedTrade(entry: entry, exit: exit))
+            activeSlots.append(SlotOccupation(releaseDate: exit?.date))
         }
         return accepted
     }
 
-    private var completedTrades: [SimulatedTrade] { simulatedTrades.filter { $0.saleDate != nil } }
-    private var openTrades: [SimulatedTrade] { simulatedTrades.filter { $0.saleDate == nil } }
+    private var completedTrades: [SimulatedTrade] { simulatedTrades.filter { $0.exit != nil } }
+    private var openTrades: [SimulatedTrade] { simulatedTrades.filter { $0.exit == nil } }
     private var openPositionCount: Int { openTrades.count }
     private var skippedOverlapCount: Int { eligibleEntries.count - simulatedTrades.count }
 
+    private var targetExitCount: Int { simulatedTrades.filter { $0.exit?.reason == .target }.count }
+    private var stopLossExitCount: Int { simulatedTrades.filter { $0.exit?.reason == .stopLoss }.count }
+    private var timeLimitExitCount: Int { simulatedTrades.filter { $0.exit?.reason == .timeLimit }.count }
+
     private var targetHitRate: Double {
         guard !simulatedTrades.isEmpty else { return 0 }
-        return Double(completedTrades.count) / Double(simulatedTrades.count)
+        return Double(targetExitCount) / Double(simulatedTrades.count)
     }
 
     private var allocationPerSlot: Double { investment / Double(minimumDivide) }
 
     private var simulatedProfit: Double {
-        allocationPerSlot * profitTarget / 100 * Double(completedTrades.count)
+        completedTrades.reduce(0) { total, trade in
+            total + allocationPerSlot * (trade.exit?.returnPercent ?? 0) / 100
+        }
     }
 
     private var unrealizedProfit: Double {
@@ -151,13 +169,12 @@ struct DailyBreakoutSimulatorView: View {
             VStack(alignment: .leading, spacing: 18) {
                 intro
                 SurfaceCard { controls }
-                scenarioTags
                 result
                 positions
                 Label(
                     L10n.text(
-                        "Historical scenario only. A position closes when the market touches the directional virtual target inside any candle; no candle close is required. Positions that never touch it remain open and add no realized profit. Fees, funding, slippage and tax are excluded.",
-                        "Yalnızca geçmiş veriye dayalı senaryodur. Piyasa herhangi bir mum içinde yönsel sanal hedefe dokunduğunda pozisyon kapanır; mum kapanışı beklenmez. Hedefe hiç dokunmayan pozisyonlar açık kalır ve gerçekleşmiş kâra eklenmez. Komisyon, fonlama, fiyat kayması ve vergi dahil değildir."
+                        "Historical scenario only. A position closes when the market touches the target or the stop loss inside any candle — no candle close is required — or at market once the holding limit expires. When one candle spans both levels, the stop is assumed to have hit first. Fees, funding, slippage and tax are excluded.",
+                        "Yalnızca geçmiş veriye dayalı senaryodur. Piyasa herhangi bir mum içinde hedefe veya stop loss'a dokunduğunda pozisyon kapanır — mum kapanışı beklenmez — ya da açık kalma limiti dolduğunda piyasa fiyatından kapatılır. Bir mum iki seviyeyi birden kapsıyorsa önce stopun geldiği varsayılır. Komisyon, fonlama, fiyat kayması ve vergi dahil değildir."
                     ),
                     systemImage: "exclamationmark.shield"
                 )
@@ -178,8 +195,8 @@ struct DailyBreakoutSimulatorView: View {
             Label(L10n.text("PRO SIMULATOR", "PRO SİMÜLATÖR"), systemImage: "function")
                 .font(.caption.bold()).foregroundStyle(TrendysseyColor.accent)
             Text(scenarioDirection == .bullish
-                ? L10n.text("What would the measured breakouts have returned?", "Ölçülen kırılımlar ne kadar sonuç üretirdi?")
-                : L10n.text("What would the measured breakdowns have returned?", "Ölçülen düşüş kırılımları ne kadar sonuç üretirdi?"))
+                ? L10n.text("What would the measured breakouts have returned if you invested $100k?", "100k $ yatırsaydın ölçülen kırılımlar ne getirirdi?")
+                : L10n.text("What would the measured breakdowns have returned if you invested $100k?", "100k $ yatırsaydın ölçülen düşüş kırılımları ne getirirdi?"))
                 .font(.title2.bold())
             Text(L10n.text(
                 "Every \(scenarioModel.title) entry that matched your filters in \(lookback.title.lowercased()) is listed below as a realized sale or an open position.",
@@ -217,29 +234,7 @@ struct DailyBreakoutSimulatorView: View {
 
     private var controls: some View {
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text(L10n.text("Investment amount", "Senaryo tutarı")).font(.subheadline.bold())
-                    Spacer()
-                    Text(investment, format: .currency(code: "USD").precision(.fractionLength(0)))
-                        .font(.headline).monospacedDigit().foregroundStyle(TrendysseyColor.accent)
-                }
-                Slider(value: $investment, in: 100...100_000, step: 100).tint(TrendysseyColor.accent)
-            }
-            .padding(.vertical, 10)
-            Divider()
             VStack(spacing: 0) {
-                selectionRow(
-                    L10n.text("Model", "Model"),
-                    value: scenarioModel.title
-                ) {
-                    Picker("", selection: $scenarioModel) {
-                        ForEach(JourneyModel.selectableCases) { model in
-                            Text(model.title).tag(model)
-                        }
-                    }
-                }
-                Divider()
                 selectionRow(
                     L10n.text("Timeframe", "Zaman dilimi"),
                     value: AnalysisTimeframe(rawValue: preferredTimeframe)?.title ?? preferredTimeframe
@@ -273,7 +268,19 @@ struct DailyBreakoutSimulatorView: View {
                     }
                 }
                 Divider()
-                scoreThresholdRows
+                stepperRow(
+                    L10n.text("Min. success rate: \(minimumSuccessRate)%", "Min. başarı oranı: %\(minimumSuccessRate)"),
+                    value: $minimumSuccessRate,
+                    range: 0...90,
+                    step: 10
+                )
+                Divider()
+                stepperRow(
+                    L10n.text("Min. signal strength: \(minimumRelativeStrength)", "Min. sinyal gücü: \(minimumRelativeStrength)"),
+                    value: $minimumRelativeStrength,
+                    range: 0...90,
+                    step: 10
+                )
                 Divider()
                 stepperRow(
                     L10n.text("Minimum 24h volume: \(minimumVolumeText)", "Minimum 24s hacim: \(minimumVolumeText)"),
@@ -298,65 +305,26 @@ struct DailyBreakoutSimulatorView: View {
                         .font(.headline).monospacedDigit().foregroundStyle(TrendysseyColor.positive)
                 }
                 Slider(value: $profitTarget, in: 0.5...20, step: 0.5).tint(TrendysseyColor.positive)
-                Text(L10n.text(
-                    "Enter when \(entryStatus.title(scenarioDirection)) begins and close when the \(scenarioDirection == .bullish ? "upside" : "downside") target is touched.",
-                    "\(entryStatus.title(scenarioDirection)) başladığında giriş, \(scenarioDirection == .bullish ? "yukarı" : "aşağı") yönlü hedefe dokunulduğunda kapanış kabul edilir."
-                ))
-                .font(.caption).foregroundStyle(TrendysseyColor.secondaryText)
             }
             .padding(.top, 10)
-        }
-    }
-
-    /// The four minimum-score steppers folded behind one summary row, the same
-    /// presentation the notification score thresholds use in Settings.
-    private var scoreThresholdRows: some View {
-        DisclosureGroup(isExpanded: $isScoreThresholdsExpanded) {
-            VStack(spacing: 0) {
-                stepperRow(
-                    L10n.text("Minimum regime: \(minimumRegime)", "Minimum rejim: \(minimumRegime)"),
-                    value: $minimumRegime,
-                    range: 0...90,
-                    step: 10
-                )
-                Divider()
-                stepperRow(
-                    L10n.text("Minimum readiness: \(minimumReadiness)", "Minimum hazırlık: \(minimumReadiness)"),
-                    value: $minimumReadiness,
-                    range: 0...90,
-                    step: 10
-                )
-                Divider()
-                stepperRow(
-                    L10n.text("Minimum breakout quality: \(minimumBreakoutQuality)", "Minimum kırılım kalitesi: \(minimumBreakoutQuality)"),
-                    value: $minimumBreakoutQuality,
-                    range: 0...90,
-                    step: 10
-                )
-                Divider()
-                stepperRow(
-                    L10n.text("Minimum confirmation: \(minimumConfirmation)", "Minimum teyit: \(minimumConfirmation)"),
-                    value: $minimumConfirmation,
-                    range: 0...90,
-                    step: 10
-                )
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text(L10n.text("Stop loss", "Stop loss")).font(.subheadline.bold())
+                    Spacer()
+                    Text(-stopLoss / 100, format: .percent.precision(.fractionLength(1)))
+                        .font(.headline).monospacedDigit().foregroundStyle(TrendysseyColor.negative)
+                }
+                Slider(value: $stopLoss, in: 0.5...20, step: 0.5).tint(TrendysseyColor.negative)
             }
-        } label: {
-            HStack(spacing: 12) {
-                Text(L10n.text("Score thresholds", "Puan eşikleri"))
-                    .font(.subheadline)
-                    .foregroundStyle(TrendysseyColor.primaryText)
-                    .lineLimit(1).minimumScaleFactor(0.8)
-                Spacer(minLength: 8)
-                Text(L10n.text(
-                    "R\(minimumRegime) · Rd\(minimumReadiness) · Q\(minimumBreakoutQuality) · C\(minimumConfirmation)",
-                    "R\(minimumRegime) · H\(minimumReadiness) · K\(minimumBreakoutQuality) · T\(minimumConfirmation)"
-                ))
-                .font(.subheadline).monospacedDigit()
-                .foregroundStyle(TrendysseyColor.secondaryText)
-            }
+            .padding(.top, 10)
+            Divider().padding(.top, 10)
+            stepperRow(
+                L10n.text("Max. holding time: \(maxOpenHours)h", "Maks. açık kalma: \(maxOpenHours)s"),
+                value: $maxOpenHours,
+                range: 4...168,
+                step: 4
+            )
         }
-        .frame(minHeight: 44)
     }
 
     @ViewBuilder private var result: some View {
@@ -388,8 +356,8 @@ struct DailyBreakoutSimulatorView: View {
                         .foregroundStyle(simulatedProfit >= 0 ? TrendysseyColor.positive : TrendysseyColor.negative)
                         .monospacedDigit()
                     Text(L10n.text(
-                        "The budget is split into \(minimumDivide) reusable slot(s), \(Self.currencyText(allocationPerSlot, fractionDigits: 0)) each. \(completedTrades.count) directional position(s) closed at \(Self.percentText(profitTarget)).",
-                        "Bütçe, her biri \(Self.currencyText(allocationPerSlot, fractionDigits: 0)) olan yeniden kullanılabilir \(minimumDivide) slota bölünür. \(completedTrades.count) yönsel pozisyon \(Self.percentText(profitTarget)) seviyesinde kapandı."
+                        "The budget is split into \(minimumDivide) reusable slot(s), \(Self.currencyText(allocationPerSlot, fractionDigits: 0)) each. \(completedTrades.count) position(s) closed: \(targetExitCount) at the target, \(stopLossExitCount) at the stop, \(timeLimitExitCount) at the \(maxOpenHours)h limit.",
+                        "Bütçe, her biri \(Self.currencyText(allocationPerSlot, fractionDigits: 0)) olan yeniden kullanılabilir \(minimumDivide) slota bölünür. \(completedTrades.count) pozisyon kapandı: \(targetExitCount) hedefte, \(stopLossExitCount) stopta, \(timeLimitExitCount) tanesi \(maxOpenHours) saat limitinde."
                     ))
                     .font(.caption).foregroundStyle(TrendysseyColor.secondaryText)
                     Divider()
@@ -398,7 +366,8 @@ struct DailyBreakoutSimulatorView: View {
                     scoreProfile
                     HStack(spacing: 10) {
                         resultMetric(L10n.text("Target hit", "Hedefe ulaşma"), targetHitRate, format: .percent.precision(.fractionLength(0)))
-                        resultCount(L10n.text("Closed", "Kapandı"), completedTrades.count)
+                        resultCount(L10n.text("Stopped", "Stop"), stopLossExitCount)
+                        resultCount(L10n.text("Timed out", "Süre doldu"), timeLimitExitCount)
                         resultCount(L10n.text("Open", "Açık"), openPositionCount)
                     }
                     if openPositionCount > 0 {
@@ -447,31 +416,17 @@ struct DailyBreakoutSimulatorView: View {
                     tint: TrendysseyColor.secondaryText
                 )
             }
-            if minimumRegime > 0 {
+            if minimumSuccessRate > 0 {
                 funnelRow(
-                    L10n.text("Below regime \(minimumRegime)", "Rejim \(minimumRegime) altında"),
-                    volumeEligibleEntries.count - regimeEligibleEntries.count,
+                    L10n.text("Success rate below \(minimumSuccessRate)%", "Başarı oranı %\(minimumSuccessRate) altında"),
+                    volumeEligibleEntries.count - successEligibleEntries.count,
                     tint: TrendysseyColor.secondaryText
                 )
             }
-            if minimumReadiness > 0 {
+            if minimumRelativeStrength > 0 {
                 funnelRow(
-                    L10n.text("Below readiness \(minimumReadiness)", "Hazırlık \(minimumReadiness) altında"),
-                    regimeEligibleEntries.count - readinessEligibleEntries.count,
-                    tint: TrendysseyColor.secondaryText
-                )
-            }
-            if minimumBreakoutQuality > 0 {
-                funnelRow(
-                    L10n.text("Below quality \(minimumBreakoutQuality)", "Kalite \(minimumBreakoutQuality) altında"),
-                    readinessEligibleEntries.count - qualityEligibleEntries.count,
-                    tint: TrendysseyColor.secondaryText
-                )
-            }
-            if minimumConfirmation > 0 {
-                funnelRow(
-                    L10n.text("Below confirmation \(minimumConfirmation)", "Teyit \(minimumConfirmation) altında"),
-                    qualityEligibleEntries.count - eligibleEntries.count,
+                    L10n.text("Below signal strength \(minimumRelativeStrength)", "Sinyal gücü \(minimumRelativeStrength) altında"),
+                    successEligibleEntries.count - eligibleEntries.count,
                     tint: TrendysseyColor.secondaryText
                 )
             }
@@ -487,8 +442,8 @@ struct DailyBreakoutSimulatorView: View {
                     tint: TrendysseyColor.warning
                 )
                 Text(L10n.text(
-                    "A position holds its slot until the target is hit, so positions that never reach it keep their slot for the rest of the window. Entries are filled oldest first, so later signals are the ones dropped. Raise the divide to make room.",
-                    "Bir pozisyon hedefe ulaşana kadar slotunu tutar; hedefe hiç ulaşmayanlar aralığın sonuna kadar slotu bırakmaz. Girişler en eskiden başlayarak doldurulur, dolayısıyla atlananlar hep sonraki sinyallerdir. Yer açmak için bölme sayısını artırabilirsin."
+                    "A position holds its slot until it closes — at the target, the stop loss or the \(maxOpenHours)h limit. Entries are filled oldest first, so later signals are the ones dropped. Raise the divide to make room.",
+                    "Bir pozisyon kapanana kadar slotunu tutar — hedefte, stop loss'ta veya \(maxOpenHours) saat limitinde. Girişler en eskiden başlayarak doldurulur, dolayısıyla atlananlar hep sonraki sinyallerdir. Yer açmak için bölme sayısını artırabilirsin."
                 ))
                 .font(.caption2).foregroundStyle(TrendysseyColor.secondaryText).lineSpacing(2)
             }
@@ -505,31 +460,28 @@ struct DailyBreakoutSimulatorView: View {
 
     private var scoreProfile: some View {
         VStack(alignment: .leading, spacing: 9) {
-            Text(L10n.text("AVERAGE ENTRY SCORES", "ORTALAMA GİRİŞ PUANLARI"))
+            Text(L10n.text("AVERAGE SIGNAL STRENGTH AT ENTRY", "ORTALAMA GİRİŞ SİNYAL GÜCÜ"))
                 .font(.caption2.bold()).foregroundStyle(TrendysseyColor.secondaryText)
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
-                scenarioScoreTile(L10n.text("Regime", "Rejim"), averageScore(\.regimeScore))
-                scenarioScoreTile(L10n.text("Readiness", "Hazırlık"), averageScore(\.readinessScore))
-                scenarioScoreTile(L10n.text("Quality", "Kalite"), averageScore(\.breakoutQualityScore))
-                scenarioScoreTile(L10n.text("Confirmation", "Teyit"), averageScore(\.confirmationScore))
-            }
+            scenarioScoreTile(L10n.text("Signal strength", "Sinyal gücü"), text: averageRelativeStrengthText)
         }
     }
 
-    private func averageScore(_ keyPath: KeyPath<BreakoutScenarioEntry, Int>) -> Int {
-        guard !simulatedTrades.isEmpty else { return 0 }
-        let total = simulatedTrades.reduce(0) { $0 + $1.entry[keyPath: keyPath] }
-        return Int((Double(total) / Double(simulatedTrades.count)).rounded())
-    }
-
-    private func scenarioScoreTile(_ title: String, _ score: Int) -> some View {
+    private func scenarioScoreTile(_ title: String, text: String) -> some View {
         HStack {
             Text(title).font(.caption2).foregroundStyle(TrendysseyColor.secondaryText)
             Spacer(minLength: 6)
-            Text("\(score)").font(.caption.bold()).monospacedDigit()
+            Text(text).font(.caption.bold()).monospacedDigit()
         }
         .padding(.horizontal, 9).padding(.vertical, 8)
         .background(TrendysseyColor.elevated, in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    /// Average over the entries that actually carry the score; "—" while the
+    /// window predates it, so an unmeasured past never reads as "average 50".
+    private var averageRelativeStrengthText: String {
+        let values = simulatedTrades.compactMap { $0.entry.relativeStrengthScore }
+        guard !values.isEmpty else { return "—" }
+        return "\(Int((Double(values.reduce(0, +)) / Double(values.count)).rounded()))"
     }
 
     // MARK: - Positions
@@ -589,23 +541,28 @@ struct DailyBreakoutSimulatorView: View {
     }
 
     private func completedRow(_ trade: SimulatedTrade) -> some View {
-        let profit = allocationPerSlot * profitTarget / 100
+        let returnPercent = trade.exit?.returnPercent ?? 0
+        let profit = allocationPerSlot * returnPercent / 100
+        let isUp = returnPercent >= 0
         return HStack(alignment: .top, spacing: 10) {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(trade.entry.symbol.replacingOccurrences(of: "USDT", with: ""))
                         .font(.subheadline.bold())
                     directionBadge(trade.entry.direction)
+                    if let reason = trade.exit?.reason {
+                        exitReasonBadge(reason)
+                    }
                 }
                 Text(L10n.text(
                     "Entry \(L10n.dateTime(trade.entry.entryDate))",
                     "Giriş \(L10n.dateTime(trade.entry.entryDate))"
                 ))
                 .font(.caption2).foregroundStyle(TrendysseyColor.secondaryText)
-                if let saleDate = trade.saleDate {
+                if let exit = trade.exit {
                     Text(L10n.text(
-                        "Closed \(L10n.dateTime(saleDate)) · held \(durationText(from: trade.entry.entryDate, to: saleDate))",
-                        "Kapanış \(L10n.dateTime(saleDate)) · süre \(durationText(from: trade.entry.entryDate, to: saleDate))"
+                        "Closed \(L10n.dateTime(exit.date)) · held \(durationText(from: trade.entry.entryDate, to: exit.date))",
+                        "Kapanış \(L10n.dateTime(exit.date)) · süre \(durationText(from: trade.entry.entryDate, to: exit.date))"
                     ))
                     .font(.caption2).foregroundStyle(TrendysseyColor.secondaryText)
                 }
@@ -615,11 +572,25 @@ struct DailyBreakoutSimulatorView: View {
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 3) {
                 Text(profit, format: .currency(code: "USD").sign(strategy: .always()).precision(.fractionLength(2)))
-                    .font(.subheadline.bold()).monospacedDigit().foregroundStyle(TrendysseyColor.positive)
-                Text(profitTarget / 100, format: .percent.sign(strategy: .always()).precision(.fractionLength(1)))
+                    .font(.subheadline.bold()).monospacedDigit()
+                    .foregroundStyle(isUp ? TrendysseyColor.positive : TrendysseyColor.negative)
+                Text(returnPercent / 100, format: .percent.sign(strategy: .always()).precision(.fractionLength(1)))
                     .font(.caption2).monospacedDigit().foregroundStyle(TrendysseyColor.secondaryText)
             }
         }
+    }
+
+    private func exitReasonBadge(_ reason: ScenarioExit.Reason) -> some View {
+        let (text, tint): (String, Color) = switch reason {
+        case .target: (L10n.text("TARGET", "HEDEF"), TrendysseyColor.positive)
+        case .stopLoss: ("STOP", TrendysseyColor.negative)
+        case .timeLimit: (L10n.text("TIME", "SÜRE"), TrendysseyColor.warning)
+        }
+        return Text(text)
+            .font(.system(size: 8, weight: .black, design: .rounded))
+            .foregroundStyle(tint)
+            .padding(.horizontal, 5).padding(.vertical, 3)
+            .background(tint.opacity(0.12), in: Capsule())
     }
 
     private func openRow(_ trade: SimulatedTrade) -> some View {
@@ -667,8 +638,8 @@ struct DailyBreakoutSimulatorView: View {
 
     private func scoreSummary(_ entry: BreakoutScenarioEntry) -> String {
         L10n.text(
-            "R \(entry.regimeScore) · Rd \(entry.readinessScore) · Q \(entry.breakoutQualityScore) · C \(entry.confirmationScore)",
-            "R \(entry.regimeScore) · H \(entry.readinessScore) · K \(entry.breakoutQualityScore) · T \(entry.confirmationScore)"
+            "Signal strength \(entry.relativeStrengthScore.map { "\($0)" } ?? "—")",
+            "Sinyal gücü \(entry.relativeStrengthScore.map { "\($0)" } ?? "—")"
         )
     }
 
@@ -768,6 +739,10 @@ struct DailyBreakoutSimulatorView: View {
     @MainActor private func load() async {
         isLoading = true
         defer { isLoading = false }
+        journeyStats = (try? await JourneyStatsService.shared.invalidationStats(
+            modelSlug: scenarioModel.serverSlug ?? AnalysisModelSelection.defaultSlug,
+            timeframe: preferredTimeframe
+        )) ?? [:]
         let result = try? await AnalysisInsightsService().scenarioEntries(
             modelSlug: scenarioModel.serverSlug ?? AnalysisModelSelection.defaultSlug,
             direction: scenarioModel.direction,

@@ -43,6 +43,16 @@ enum ScenarioLookback: Int, CaseIterable, Identifiable, Sendable {
     nonisolated var observationCandleLimit: Int { Int(hours * 4) + 8 }
 }
 
+extension Date {
+    /// Binance reports a candle's close as the boundary minus one millisecond
+    /// (10:44:59.999). Simulations and labels want the true boundary
+    /// (10:45:00) — otherwise entries display at odd minutes and window
+    /// arithmetic starts one millisecond early.
+    nonisolated var ceiledToSecond: Date {
+        Date(timeIntervalSince1970: timeIntervalSince1970.rounded(.up))
+    }
+}
+
 struct BreakoutScenarioEntry: Identifiable, Sendable {
     let id: UUID
     let symbol: String
@@ -52,6 +62,11 @@ struct BreakoutScenarioEntry: Identifiable, Sendable {
     let readinessScore: Int
     let breakoutQualityScore: Int
     let confirmationScore: Int
+    /// 0-100 percentile of the coin's ~24h excess return vs BTC at entry.
+    /// Nil for events recorded before the score shipped — those pass the
+    /// scenario's relative-strength filter rather than being judged on a
+    /// value that was never measured.
+    let relativeStrengthScore: Int?
     let falseBreakoutRisk: Int
     let volumeRatio: Double
     /// The coin's 24h quote volume, so the page's minimum-volume filter can
@@ -80,16 +95,70 @@ struct BreakoutScenarioEntry: Identifiable, Sendable {
         }
     }
 
-    func targetHitDate(profitTarget: Double) -> Date? {
+    /// Walks the observed candles and returns the first exit the position hits:
+    /// the profit target, the stop loss, or the holding deadline. When one
+    /// candle spans both the target and the stop, the stop is assumed to have
+    /// hit first — the replay must not be more optimistic than reality could
+    /// prove. Returns nil while the window ends with the position still open.
+    func exit(profitTarget: Double, stopLoss: Double, maxOpenHours: Int) -> ScenarioExit? {
+        guard entryPrice > 0 else { return nil }
+        let deadline = entryDate.addingTimeInterval(Double(maxOpenHours) * 3600)
+        let targetPrice = direction == .bullish
+            ? entryPrice * (1 + profitTarget / 100)
+            : entryPrice * (1 - profitTarget / 100)
+        let stopPrice = direction == .bullish
+            ? entryPrice * (1 - stopLoss / 100)
+            : entryPrice * (1 + stopLoss / 100)
+        var previous: PriceCandle?
+        for candle in observedCandles {
+            // The deadline expired before this candle even opened: the position
+            // was closed at the last price the market printed before it.
+            if candle.openTime >= deadline {
+                let closePrice = previous?.close ?? entryPrice
+                return ScenarioExit(
+                    date: previous?.closeTime.ceiledToSecond ?? deadline,
+                    returnPercent: directionalReturnPercent(closePrice),
+                    reason: .timeLimit
+                )
+            }
+            let stopHit = direction == .bullish ? candle.low <= stopPrice : candle.high >= stopPrice
+            if stopHit {
+                return ScenarioExit(date: candle.closeTime.ceiledToSecond, returnPercent: -stopLoss, reason: .stopLoss)
+            }
+            let targetHit = direction == .bullish ? candle.high >= targetPrice : candle.low <= targetPrice
+            if targetHit {
+                return ScenarioExit(date: candle.closeTime.ceiledToSecond, returnPercent: profitTarget, reason: .target)
+            }
+            // The deadline falls inside this candle: it survived the intrabar
+            // checks above, so it closes at this candle's close, win or lose.
+            if candle.closeTime >= deadline {
+                return ScenarioExit(
+                    date: candle.closeTime.ceiledToSecond,
+                    returnPercent: directionalReturnPercent(candle.close),
+                    reason: .timeLimit
+                )
+            }
+            previous = candle
+        }
+        return nil
+    }
+
+    private func directionalReturnPercent(_ price: Double) -> Double {
         switch direction {
-        case .bullish:
-            let targetPrice = entryPrice * (1 + profitTarget / 100)
-            return observedCandles.first(where: { $0.high >= targetPrice })?.closeTime
-        case .bearish:
-            let targetPrice = entryPrice * (1 - profitTarget / 100)
-            return observedCandles.first(where: { $0.low <= targetPrice })?.closeTime
+        case .bullish: (price - entryPrice) / entryPrice * 100
+        case .bearish: (entryPrice - price) / entryPrice * 100
         }
     }
+}
+
+struct ScenarioExit: Sendable {
+    enum Reason: Sendable {
+        case target, stopLoss, timeLimit
+    }
+
+    let date: Date
+    let returnPercent: Double
+    let reason: Reason
 }
 
 struct BreakoutScenarioResult: Sendable {
@@ -132,6 +201,7 @@ actor AnalysisInsightsService {
         let readiness_score: Int?
         let breakout_quality_score: Int?
         let confirmation_score: Int?
+        let relative_strength_score: Int?
         let false_breakout_risk: Int
         let volume_ratio: Double?
         /// The coin's 24h volume when the event happened. Filtering on this
@@ -151,7 +221,7 @@ actor AnalysisInsightsService {
     ) async throws -> BreakoutScenarioResult {
         var components = URLComponents(url: SupabaseConfig.projectURL.appending(path: "rest/v1/signal_journey_events"), resolvingAgainstBaseURL: false)!
         var queryItems: [URLQueryItem] = [
-            .init(name: "select", value: "id,status,price,candle_close_time,confidence,regime_score,readiness_score,breakout_quality_score,confirmation_score,false_breakout_risk,volume_ratio,quote_volume_24h,analysis_models!inner(slug,display_name),symbols!inner(symbol,quote_volume_24h)"),
+            .init(name: "select", value: "id,status,price,candle_close_time,confidence,regime_score,readiness_score,breakout_quality_score,confirmation_score,relative_strength_score,false_breakout_risk,volume_ratio,quote_volume_24h,analysis_models!inner(slug,display_name),symbols!inner(symbol,quote_volume_24h)"),
             .init(name: "status", value: "eq.\(Self.databaseStatus(status))"),
             .init(name: "timeframe", value: "eq.\(timeframe)"),
             .init(name: "analysis_models.slug", value: "eq.\(modelSlug)"),
@@ -202,14 +272,28 @@ actor AnalysisInsightsService {
                         return (row, date)
                     }
                     guard let earliest = datedEvents.map({ $0.1 }).min() else { return [] }
-                    guard let candles = try? await CandleService().candles(
-                        for: symbol,
-                        interval: interval,
-                        startingAt: earliest,
-                        limit: lookback.observationCandleLimit
-                    ) else { return [] }
-                    return datedEvents.map { row, entryDate in
-                        let observed = candles.filter { $0.openTime > entryDate }
+                    // One failed fetch silently deleted every trade of the
+                    // coin from the replay — on wide windows the burst of 100
+                    // parallel requests made that common enough that a 7-day
+                    // scenario could shrink to a handful of coins. Retry with
+                    // backoff before giving the symbol up.
+                    var candles: [PriceCandle]?
+                    for attempt in 0..<3 {
+                        candles = try? await CandleService().candles(
+                            for: symbol,
+                            interval: interval,
+                            startingAt: earliest,
+                            limit: lookback.observationCandleLimit
+                        )
+                        if candles != nil { break }
+                        try? await Task.sleep(for: .milliseconds(500 * (attempt + 1)))
+                    }
+                    guard let candles else { return [] }
+                    return datedEvents.map { row, rawEntryDate in
+                        // The boundary, not Binance's boundary-minus-1ms: the
+                        // trade opens exactly when the entry candle closes.
+                        let entryDate = rawEntryDate.ceiledToSecond
+                        let observed = candles.filter { $0.openTime >= entryDate }
                         return BreakoutScenarioEntry(
                             id: row.id,
                             symbol: symbol,
@@ -219,6 +303,7 @@ actor AnalysisInsightsService {
                             readinessScore: row.readiness_score ?? 0,
                             breakoutQualityScore: row.breakout_quality_score ?? row.confidence,
                             confirmationScore: row.confirmation_score ?? 0,
+                            relativeStrengthScore: row.relative_strength_score,
                             falseBreakoutRisk: row.false_breakout_risk,
                             volumeRatio: row.volume_ratio ?? 0,
                             quoteVolume24h: row.quote_volume_24h ?? row.symbols.quote_volume_24h ?? 0,

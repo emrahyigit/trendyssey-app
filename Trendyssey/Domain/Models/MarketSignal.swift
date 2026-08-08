@@ -203,6 +203,10 @@ struct MarketSignal: Identifiable, Hashable, Sendable {
     let readinessScore: Int
     let breakoutQualityScore: Int
     let confirmationScore: Int
+    /// 0-100: the coin's ~24h excess return vs BTC, 50 = moving with BTC.
+    /// Nil until the first scan after the score shipped reaches this
+    /// symbol/timeframe — shown as "—", never as a fake neutral 50.
+    let relativeStrengthScore: Int?
     let breakoutTriggered: Bool
     let falseBreakoutRisk: Int
     let activityScore: Int
@@ -229,6 +233,7 @@ struct MarketSignal: Identifiable, Hashable, Sendable {
         readinessScore: Int = 0,
         breakoutQualityScore: Int? = nil,
         confirmationScore: Int = 0,
+        relativeStrengthScore: Int? = nil,
         breakoutTriggered: Bool = false,
         falseBreakoutRisk: Int,
         activityScore: Int,
@@ -254,6 +259,7 @@ struct MarketSignal: Identifiable, Hashable, Sendable {
         self.readinessScore = readinessScore
         self.breakoutQualityScore = breakoutQualityScore ?? confidence
         self.confirmationScore = confirmationScore
+        self.relativeStrengthScore = relativeStrengthScore
         self.breakoutTriggered = breakoutTriggered
         self.falseBreakoutRisk = falseBreakoutRisk
         self.activityScore = activityScore
@@ -268,7 +274,7 @@ struct MarketSignal: Identifiable, Hashable, Sendable {
     }
 
     var baseSymbol: String { symbol.replacingOccurrences(of: "USDT", with: "") }
-    var usesAdvancedJourneyModel: Bool { evidence?.model == "gpt-5-6-sol-v1" }
+    var usesAdvancedJourneyModel: Bool { evidence?.model == "ema-7-25-99-v1" }
     var qualityTitle: String {
         L10n.text("Breakout quality", "Kırılım kalitesi")
     }

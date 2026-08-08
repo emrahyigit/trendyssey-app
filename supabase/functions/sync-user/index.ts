@@ -18,6 +18,8 @@ type SyncBody = {
     analysisModelSlug: string;
     minimumScore?: number;
     minimumRegimeScore?: number;
+    minimumSignalStrength?: number;
+    minimumSuccessRate?: number;
     minimumReadinessScore?: number;
     minimumBreakoutQualityScore?: number;
     minimumConfirmationScore?: number;
@@ -163,6 +165,8 @@ Deno.serve(async (req) => {
         preferred_analysis_model_id: requestedModel.id,
         minimum_breakout_score: minimumQuality,
         minimum_regime_score: minimumRegime,
+        minimum_signal_strength: Math.max(0, Math.min(100, Math.round(p.minimumSignalStrength ?? 0))),
+        minimum_success_rate: Math.max(0, Math.min(100, Math.round(p.minimumSuccessRate ?? 0))),
         minimum_readiness_score: minimumReadiness,
         minimum_breakout_quality_score: minimumQuality,
         minimum_confirmation_score: minimumConfirmation,

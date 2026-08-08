@@ -12,9 +12,6 @@ struct RootView: View {
                 DashboardView()
                     .navigationDestination(for: MarketSignal.self) { SignalDetailView(signal: $0) }
                     .navigationDestination(for: NotificationRoute.self) { _ in NotificationCenterView() }
-                    .navigationDestination(for: MarketCharacterRoute.self) { route in
-                        MarketCharactersView(initialCategory: route.category)
-                    }
             }
                 .tabItem { Label(L10n.text("Overview", "Özet"), systemImage: "sparkles.rectangle.stack.fill") }
                 .tag(AppTab.dashboard)
@@ -46,10 +43,6 @@ struct RootView: View {
                let signal = try? await environment.marketService.allSymbols()
                    .first(where: { $0.symbol == symbol || $0.name == symbol }) {
                 dashboardPath.append(signal)
-            }
-            if let rawCategory = UserDefaults.standard.string(forKey: "uiTestMarketCharacters"),
-               let category = MarketCharacterCategory(rawValue: rawCategory) {
-                dashboardPath.append(MarketCharacterRoute(category: category))
             }
             #endif
         }

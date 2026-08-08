@@ -9,8 +9,9 @@ struct SignalDetailView: View {
     @State private var analysis: JourneyAnalysis?
     @State private var chartOverlay = JourneyChartOverlay.empty
     @State private var chartError = false
-    @State private var characterBadges: [MarketCharacterEntry] = []
-    @State private var showQualityDeductions = false
+    @State private var journeyStats: SymbolJourneyStats?
+    /// (holds, fails) among predictors with a proven record on this journey.
+    @State private var topPredictorConsensus: (holds: Int, fails: Int)?
     @AppStorage("preferredTimeframe") private var preferredTimeframe = "15m"
     @AppStorage(JourneyModel.storageKey) private var journeyModel = JourneyModel.donchian20.rawValue
 
@@ -27,7 +28,13 @@ struct SignalDetailView: View {
         "patternBase": Color(red: 0.62, green: 0.49, blue: 0.92),
     ]
 
-    private var selectedModel: JourneyModel { JourneyModel(rawValue: journeyModel) ?? .donchian20 }
+    /// Raw storage may still hold a retired model from an older install; the
+    /// chart must follow the same gate the data queries use.
+    private var selectedModel: JourneyModel {
+        guard let model = JourneyModel(rawValue: journeyModel),
+              JourneyModel.selectableCases.contains(model) else { return .emaCross }
+        return model
+    }
     private var selectedTimeframe: AnalysisTimeframe { AnalysisTimeframe(rawValue: preferredTimeframe) ?? .m15 }
     private var currentPhase: SignalStatus { analysis?.currentPhase ?? signal.status }
     private var direction: JourneyDirection { analysis?.direction ?? selectedModel.direction }
@@ -64,14 +71,31 @@ struct SignalDetailView: View {
                     favorite
                 }
                 SurfaceCard { candleChart }
+                SurfaceCard {
+                    VStack(alignment: .leading, spacing: 14) {
+                        confidenceCard
+                        if let journeyStats, journeyStats.startedCount > 0 {
+                            Divider()
+                            breakoutHistoryCard(journeyStats)
+                        }
+                        if let consensus = topPredictorConsensus {
+                            Divider()
+                            HStack(spacing: 8) {
+                                Image(systemName: "person.2.badge.gearshape")
+                                    .font(.caption).foregroundStyle(TrendysseyColor.accent)
+                                Text(L10n.text(
+                                    "Top predictors on this breakout: \(consensus.holds) holds · \(consensus.fails) fails",
+                                    "Bu kırılımda en iyi tahminciler: \(consensus.holds) tutar · \(consensus.fails) geçersiz"
+                                ))
+                                .font(.caption.weight(.semibold))
+                            }
+                        }
+                    }
+                }
                 if liveAnalysisAllowed {
                     SurfaceCard { journeyCard }
-                    SurfaceCard { confidenceCard }
                 } else {
                     SurfaceCard { proTeaser }
-                }
-                if !characterBadges.isEmpty {
-                    SurfaceCard { characterBadgesCard }
                 }
                 SurfaceCard { CoinChatPreview(symbol: signal.symbol, journeyID: signal.journeyID, journeyPhase: currentPhase) }
             }.padding(18)
@@ -81,8 +105,10 @@ struct SignalDetailView: View {
                 let requestedTimeframe = selectedTimeframe
                 analysis = nil
                 chartOverlay = .empty
-                characterBadges = []
-                Task { await loadCharacterBadges(timeframe: requestedTimeframe) }
+                journeyStats = nil
+                topPredictorConsensus = nil
+                Task { await loadJourneyStats(timeframe: requestedTimeframe) }
+                Task { await loadTopPredictorConsensus() }
                 while !Task.isCancelled {
                     await loadCandles(model: requestedModel, timeframe: requestedTimeframe)
                     try? await Task.sleep(for: .seconds(5))
@@ -361,7 +387,11 @@ struct SignalDetailView: View {
             }
             if let analysis {
                 SignalJourneyProgress(status: analysis.currentPhase, direction: analysis.direction, compact: true)
-                let events = analysis.events(lastHours: 24)
+                // The story starts at the latest breakout; earlier phases of
+                // the same day belong to journeys that already ended.
+                let recentEvents = analysis.events(lastHours: 24)
+                let events = recentEvents.lastIndex(where: { $0.status == .breakoutDetected })
+                    .map { Array(recentEvents[$0...]) } ?? recentEvents
                 if events.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(L10n.text("No phase transition in the last 24 hours.", "Son 24 saatte aşama geçişi olmadı."))
@@ -397,8 +427,16 @@ struct SignalDetailView: View {
             } else if chartError {
                 Label(L10n.text("Journey analysis is temporarily unavailable.", "Süreç analizi geçici olarak kullanılamıyor."), systemImage: "exclamationmark.triangle")
                     .font(.caption).foregroundStyle(TrendysseyColor.warning)
-            } else {
+            } else if candles.isEmpty {
                 ProgressView().frame(maxWidth: .infinity).padding(.vertical, 16)
+            } else {
+                // Candles loaded but the server has no signal row yet — say so
+                // instead of spinning forever.
+                Label(L10n.text(
+                    "No recorded journey for this coin yet; it fills in with the next scan.",
+                    "Bu coin için henüz kayıtlı bir süreç yok; bir sonraki taramayla dolacak."
+                ), systemImage: "clock")
+                .font(.caption).foregroundStyle(TrendysseyColor.secondaryText)
             }
         }
     }
@@ -412,197 +450,128 @@ struct SignalDetailView: View {
         }
     }
 
-    // MARK: - Character badges
+    // MARK: - Breakout track record
 
-    private var characterBadgesCard: some View {
+    private func breakoutHistoryCard(_ stats: SymbolJourneyStats) -> some View {
         VStack(alignment: .leading, spacing: 14) {
-            Label(L10n.text("Character Badges", "Karakter Rozetleri"), systemImage: "rosette")
+            Label(L10n.text("Breakout Track Record", "Kırılım Karnesi"), systemImage: "checklist")
                 .font(.headline)
-            ForEach(characterBadges) { badge in
-                HStack(spacing: 11) {
-                    Image(systemName: badge.category.systemImage)
-                        .font(.subheadline)
-                        .foregroundStyle(badge.category.tint)
-                        .frame(width: 34, height: 34)
-                        .background(badge.category.tint.opacity(0.12), in: Circle())
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(badge.category.badgeTitle)
-                            .font(.subheadline.weight(.semibold))
-                        Text(badgeDetail(badge))
-                            .font(.caption)
-                            .foregroundStyle(TrendysseyColor.secondaryText)
-                            .lineLimit(2)
-                            .minimumScaleFactor(0.8)
-                    }
-                    Spacer(minLength: 8)
-                    Text(badgeValue(badge))
-                        .font(.headline.bold()).monospacedDigit()
-                        .foregroundStyle(badge.category.tint)
-                }
-                .accessibilityElement(children: .combine)
+            HStack(spacing: 10) {
+                trackRecordTile(
+                    value: "\(stats.startedCount)",
+                    title: L10n.text("Breakouts", "Kırılım"),
+                    tint: TrendysseyColor.accent
+                )
+                trackRecordTile(
+                    value: "\(stats.invalidatedCount)",
+                    title: L10n.text("Invalidated", "Geçersiz"),
+                    tint: TrendysseyColor.negative
+                )
+                trackRecordTile(
+                    value: stats.successRatePercent.map {
+                        "\($0.formatted(.number.precision(.fractionLength(0)).locale(L10n.locale)))%"
+                    } ?? "—",
+                    title: L10n.text("Success rate", "Başarı oranı"),
+                    tint: TrendysseyColor.positive
+                )
+            }
+            if stats.isHighInvalidation {
+                Label(L10n.text(
+                    "More than three quarters of this coin's recent breakouts were invalidated — a sign of fake-outs. It is left out of Featured Breakouts and Waiting for Breakout until its record improves.",
+                    "Bu coinin son kırılımlarının dörtte üçünden fazlası geçersiz kaldı — sahte kırılım işareti. Karnesi düzelene kadar Öne Çıkan Kırılımlar ve Kırılım Beklenenler listelerine alınmıyor."
+                ), systemImage: "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundStyle(TrendysseyColor.negative)
+                .lineSpacing(2)
             }
             Text(L10n.text(
-                "From the last 30 days of \(selectedModel.title) journeys on \(selectedTimeframe.title) candles. Badges are technical labels, not advice.",
-                "Kapanmış \(selectedTimeframe.title) mumlarında son 30 günün \(selectedModel.title) yolculuklarından. Rozetler teknik etikettir; tavsiye değildir."
+                "The coin's breakouts over the last 30 days on this timeframe. Success rate is the share not invalidated.",
+                "Coinin bu zaman diliminde son 30 gündeki kırılımları. Başarı oranı, geçersiz kalmayanların payıdır."
             ))
             .font(.caption2).foregroundStyle(TrendysseyColor.secondaryText).lineSpacing(2)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func badgeDetail(_ badge: MarketCharacterEntry) -> String {
-        switch badge.category {
-        case .successful:
-            L10n.text(
-                "\(badge.successCount)/\(badge.sampleCount) breakouts completed · \(badge.category.badgeSummary)",
-                "\(badge.successCount)/\(badge.sampleCount) kırılım tamamlandı · \(badge.category.badgeSummary)"
-            )
-        case .disappointing:
-            L10n.text(
-                "\(badge.failureCount)/\(badge.sampleCount) breakouts invalidated · \(badge.category.badgeSummary)",
-                "\(badge.failureCount)/\(badge.sampleCount) kırılım geçersiz · \(badge.category.badgeSummary)"
-            )
-        case .overheated, .depressed:
-            badge.category.badgeSummary
+    private func trackRecordTile(value: String, title: String, tint: Color) -> some View {
+        VStack(spacing: 3) {
+            Text(value)
+                .font(.title3.bold()).monospacedDigit()
+                .foregroundStyle(tint)
+            Text(title)
+                .font(.caption2)
+                .foregroundStyle(TrendysseyColor.secondaryText)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
         }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 10)
+        .background(tint.opacity(0.1), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
-    private func badgeValue(_ badge: MarketCharacterEntry) -> String {
-        switch badge.category {
-        case .successful, .disappointing:
-            "\(badge.score.formatted(.number.precision(.fractionLength(0...1)).locale(L10n.locale)))%"
-        case .overheated, .depressed:
-            badge.score.formatted(.number.precision(.fractionLength(0)).locale(L10n.locale))
+    /// Counts only predictions from users with a proven record (5+ resolved,
+    /// 60%+ accuracy), so the line reflects informed opinion, not raw votes.
+    @MainActor private func loadTopPredictorConsensus() async {
+        guard let journeyID = signal.journeyID else { return }
+        let service = SignalPredictionService()
+        guard let votes = try? await service.journeyPredictions(journeyID: journeyID), !votes.isEmpty,
+              let records = try? await service.accuracies(userIDs: votes.map(\.userID)) else { return }
+        let qualified = votes.filter { vote in
+            guard let record = records[vote.userID] else { return false }
+            return record.resolvedCount >= 5 && record.accuracyPercent >= 60
         }
+        guard !qualified.isEmpty else { return }
+        topPredictorConsensus = (
+            holds: qualified.filter(\.holds).count,
+            fails: qualified.filter { !$0.holds }.count
+        )
     }
 
-    @MainActor private func loadCharacterBadges(timeframe: AnalysisTimeframe) async {
-        let rankings = (try? await MarketCharacterService.shared.rankings(
+    @MainActor private func loadJourneyStats(timeframe: AnalysisTimeframe) async {
+        let stats = try? await JourneyStatsService.shared.stats(
+            symbol: signal.symbol,
             modelSlug: AnalysisModelSelection.selectedSlug,
             timeframe: timeframe.rawValue
-        )) ?? []
+        )
         guard timeframe == selectedTimeframe else { return }
-        characterBadges = rankings.filter { $0.symbol == signal.symbol }
+        journeyStats = stats
     }
 
-    // MARK: - Breakout scores
+    // MARK: - Signal strength
 
-    @ViewBuilder private var confidenceCard: some View {
+    private var confidenceCard: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Label(L10n.text("Breakout Scores", "Kırılım Puanları"), systemImage: "gauge.with.needle")
+            Label(L10n.text("Signal Strength", "Sinyal Gücü"), systemImage: "gauge.with.needle")
                 .font(.headline)
-            if let analysis {
-                if let scores = analysis.scoreLayers {
-                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-                        scoreLayerTile(L10n.text("Regime", "Rejim"), scores.regimeScore)
-                        scoreLayerTile(L10n.text("Readiness", "Hazırlık"), scores.readinessScore)
-                        scoreLayerTile(L10n.text("Breakout quality", "Kırılım kalitesi"), scores.breakoutQualityScore)
-                        scoreLayerTile(L10n.text("Confirmation", "Teyit"), scores.confirmationScore)
-                    }
-                    Divider()
-                }
-                HStack(alignment: .firstTextBaseline) {
-                    Text("\(analysis.confidence)").font(.system(size: 52, weight: .bold, design: .rounded)).monospacedDigit()
-                        + Text(" / 100").font(.subheadline).foregroundColor(TrendysseyColor.secondaryText)
-                    Spacer()
-                    Text(confidenceLevelTitle(analysis.confidence))
+            HStack(alignment: .firstTextBaseline) {
+                Text(signal.relativeStrengthScore.map { "\($0)" } ?? "—")
+                    .font(.system(size: 52, weight: .bold, design: .rounded)).monospacedDigit()
+                    + Text(" / 100").font(.subheadline).foregroundColor(TrendysseyColor.secondaryText)
+                Spacer()
+                if let strength = signal.relativeStrengthScore {
+                    Text(confidenceLevelTitle(strength))
                         .font(.caption.bold())
-                        .foregroundStyle(confidenceColor(analysis.confidence))
+                        .foregroundStyle(confidenceColor(strength))
                         .padding(.horizontal, 10).padding(.vertical, 6)
-                        .background(confidenceColor(analysis.confidence).opacity(0.12), in: Capsule())
-                }
-                GeometryReader { proxy in
-                    ZStack(alignment: .leading) {
-                        Capsule().fill(TrendysseyColor.border)
-                        Capsule()
-                            .fill(confidenceColor(analysis.confidence))
-                            .frame(width: max(6, proxy.size.width * CGFloat(analysis.confidence) / 100))
-                    }
-                }
-                .frame(height: 6)
-                Divider()
-                Text(L10n.text("How were these scores formed?", "Bu puanlar nasıl oluştu?")).font(.subheadline.bold())
-                ForEach(analysis.factors) { factor in factorRow(factor) }
-                directionalEvidenceSection(analysis)
-                Text(L10n.text("Data is a statistical assessment, not investment advice.", "Veriler istatistiksel değerlendirmedir; yatırım tavsiyesi değildir."))
-                    .font(.caption2).foregroundStyle(TrendysseyColor.secondaryText)
-            } else if chartError {
-                Text(L10n.text("The score could not be computed because candle data is unavailable.", "Mum verisi alınamadığı için puan hesaplanamadı."))
-                    .font(.caption).foregroundStyle(TrendysseyColor.warning)
-            } else {
-                ProgressView().frame(maxWidth: .infinity).padding(.vertical, 16)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    /// Quality deductions: only the bearish warnings that actually fired, each
-    /// as the points it subtracted. There are no bullish bonuses — the base
-    /// score is earned by the breakout candle itself. When nothing fired the
-    /// section is absent.
-    @ViewBuilder private func directionalEvidenceSection(_ analysis: JourneyAnalysis) -> some View {
-        let active = analysis.directionalFactors
-            .map { factor in (factor: factor, deduction: factor.score - factor.maxScore) }
-            .filter { $0.deduction < 0 }
-        let net = active.reduce(0) { $0 + $1.deduction }
-        let quality = analysis.scoreLayers?.breakoutQualityScore ?? 0
-        // Current signals store quality with deductions already applied, so the
-        // arrow reconstructs the base: "83 → 66". Signals recorded before
-        // deductions froze with the trigger would reconstruct an impossible
-        // base above 100; for those the arrow starts from the pinned score
-        // instead and reads as today's reassessment: "95 → 82".
-        let arrow: (from: Int, to: Int) = quality - net <= 100
-            ? (quality - net, quality)
-            : (quality, quality + net)
-        if !active.isEmpty {
-            DisclosureGroup(isExpanded: $showQualityDeductions) {
-                VStack(alignment: .leading, spacing: 9) {
-                    ForEach(active, id: \.factor.key) { entry in
-                        HStack(alignment: .top, spacing: 9) {
-                            Image(systemName: "arrow.down.circle.fill")
-                                .foregroundStyle(TrendysseyColor.negative)
-                                .font(.caption)
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(entry.factor.title).font(.caption.bold())
-                                Text(entry.factor.detail)
-                                    .font(.caption2).foregroundStyle(TrendysseyColor.secondaryText)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                            Spacer(minLength: 8)
-                            // "-7/12": 7 of a possible 12 points deducted.
-                            Text("\(entry.deduction)/\(entry.factor.maxScore)")
-                                .font(.caption.bold()).monospacedDigit()
-                                .foregroundStyle(TrendysseyColor.negative)
-                                .padding(.horizontal, 7).padding(.vertical, 4)
-                                .background(TrendysseyColor.negative.opacity(0.10), in: Capsule())
-                        }
-                    }
-                }
-                .padding(.top, 8)
-            } label: {
-                HStack(spacing: 8) {
-                    Text(L10n.text("Quality deductions", "Kalite kesintileri"))
-                        .font(.caption.bold())
-                        .foregroundStyle(TrendysseyColor.primaryText)
-                    Spacer(minLength: 8)
-                    if quality > 0 {
-                        Text("\(arrow.from) → \(arrow.to)")
-                            .font(.caption.bold()).monospacedDigit()
-                            .foregroundStyle(TrendysseyColor.negative)
-                    }
+                        .background(confidenceColor(strength).opacity(0.12), in: Capsule())
                 }
             }
-        }
-    }
-
-    private func scoreLayerTile(_ title: String, _ score: Int) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text(title).font(.caption2.bold()).foregroundStyle(TrendysseyColor.secondaryText)
-            Text("\(score) / 100").font(.headline).monospacedDigit()
+            GeometryReader { proxy in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(TrendysseyColor.border)
+                    Capsule()
+                        .fill(confidenceColor(signal.relativeStrengthScore ?? 0))
+                        .frame(width: max(6, proxy.size.width * CGFloat(signal.relativeStrengthScore ?? 0) / 100))
+                }
+            }
+            .frame(height: 6)
+            Text(L10n.text(
+                "The coin's recent performance against BTC, ranked across all scanned coins. Statistical data, not investment advice.",
+                "Coinin yakın dönem BTC karşısındaki performansının taranan coinler içindeki sıralaması. İstatistiksel veridir; yatırım tavsiyesi değildir."
+            ))
+            .font(.caption2).foregroundStyle(TrendysseyColor.secondaryText).lineSpacing(2)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(10)
-        .background(TrendysseyColor.elevated, in: RoundedRectangle(cornerRadius: 12))
     }
 
     private func factorRow(_ factor: ConfidenceFactor) -> some View {

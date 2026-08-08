@@ -17,6 +17,17 @@ struct PredictionAccuracy: Sendable {
     }
 }
 
+struct TopPredictor: Identifiable, Sendable {
+    let userID: UUID
+    let displayName: String
+    let avatarKey: String?
+    let resolvedCount: Int
+    let correctCount: Int
+    let accuracy: Int
+
+    var id: UUID { userID }
+}
+
 /// "Tutar mı?" predictions on breakout journeys plus per-user accuracy stats
 /// used for the chat badges. A prediction resolves against the first
 /// confirmed/failed journey event that closes after it.
@@ -68,6 +79,40 @@ actor SignalPredictionService {
         guard let http = response as? HTTPURLResponse else { throw PredictionError.requestFailed }
         if http.statusCode == 409 { throw PredictionError.alreadyPredicted }
         guard 200..<300 ~= http.statusCode else { throw PredictionError.requestFailed }
+    }
+
+    private struct TopPredictorRow: Decodable {
+        let user_id: UUID
+        let display_name: String
+        let avatar_key: String?
+        let resolved_count: Int
+        let correct_count: Int
+        let accuracy: Int
+    }
+
+    /// Leaderboard ranked by the Wilson lower bound server-side, so a lucky
+    /// 1/1 cannot outrank a proven 9/10.
+    func topPredictors(limit: Int = 10) async throws -> [TopPredictor] {
+        var request = try await authorizedRequest(url: SupabaseConfig.projectURL.appending(path: "rest/v1/rpc/get_top_predictors"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["p_limit": limit])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else { throw PredictionError.requestFailed }
+        return try JSONDecoder().decode([TopPredictorRow].self, from: data).map {
+            TopPredictor(userID: $0.user_id, displayName: $0.display_name, avatarKey: $0.avatar_key, resolvedCount: $0.resolved_count, correctCount: $0.correct_count, accuracy: $0.accuracy)
+        }
+    }
+
+    /// Every prediction on a journey, so screens can weigh them by predictor.
+    func journeyPredictions(journeyID: UUID) async throws -> [(userID: UUID, holds: Bool)] {
+        var components = URLComponents(url: SupabaseConfig.projectURL.appending(path: "rest/v1/signal_predictions"), resolvingAgainstBaseURL: false)!
+        components.queryItems = [
+            .init(name: "select", value: "user_id,prediction"),
+            .init(name: "journey_id", value: "eq.\(journeyID.uuidString.lowercased())"),
+            .init(name: "limit", value: "1000"),
+        ]
+        return try await get([PredictionRow].self, url: components.url!).map { ($0.user_id, $0.prediction == "holds") }
     }
 
     func accuracies(userIDs: [UUID]) async throws -> [UUID: PredictionAccuracy] {

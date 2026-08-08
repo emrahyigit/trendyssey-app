@@ -2,16 +2,12 @@ import SwiftUI
 
 struct ScannerView: View {
     private enum SortOption: String, CaseIterable, Identifiable {
-        case stageScore, regime, readiness, quality, confirmation, volume, change
+        case strength, volume, change
 
         var id: Self { self }
         var title: String {
             switch self {
-            case .stageScore: L10n.text("Current-stage score", "Aşama puanı")
-            case .regime: L10n.text("Regime", "Rejim")
-            case .readiness: L10n.text("Readiness", "Hazırlık")
-            case .quality: L10n.text("Breakout quality", "Kırılım kalitesi")
-            case .confirmation: L10n.text("Confirmation", "Teyit")
+            case .strength: L10n.text("Signal strength", "Sinyal gücü")
             case .volume: L10n.text("24h volume", "24s hacim")
             case .change: L10n.text("24h change", "24s değişim")
             }
@@ -29,7 +25,7 @@ struct ScannerView: View {
     @State private var selectedSignal: MarketSignal?
     @State private var isLoading = true
     @State private var statusFilter: SignalStatus?
-    @State private var sortOption: SortOption = .stageScore
+    @State private var sortOption: SortOption = .strength
     @AppStorage("preferredTimeframe") private var preferredTimeframe = "15m"
     @AppStorage(JourneyModel.storageKey) private var journeyModel = JourneyModel.donchian20.rawValue
 
@@ -44,11 +40,7 @@ struct ScannerView: View {
     private func score(for signal: MarketSignal, option: SortOption) -> Int {
         guard signal.hasScore else { return 0 }
         return switch option {
-        case .stageScore: signal.stageScore
-        case .regime: signal.regimeScore
-        case .readiness: signal.readinessScore
-        case .quality: signal.breakoutQualityScore
-        case .confirmation: signal.confirmationScore
+        case .strength: signal.relativeStrengthScore ?? 0
         case .volume, .change: 0
         }
     }
@@ -62,7 +54,7 @@ struct ScannerView: View {
             return matchesQuery && matchesStatus
         }
         switch sortOption {
-        case .stageScore, .regime, .readiness, .quality, .confirmation:
+        case .strength:
             return filtered.sorted {
                 let lhs = score(for: $0, option: sortOption)
                 let rhs = score(for: $1, option: sortOption)
