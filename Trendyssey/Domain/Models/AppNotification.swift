@@ -10,6 +10,7 @@ struct AppNotification: Identifiable, Hashable, Sendable {
     let body: String
     var status: AppNotificationStatus
     let createdAt: Date
+    let signalStatus: SignalStatus?
     let signal: MarketSignal?
 
     var isUnread: Bool { status == .unread }

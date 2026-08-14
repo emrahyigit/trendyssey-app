@@ -64,7 +64,7 @@ enum ChartOverlayService {
 
         case .doubleBottom, .doubleTop:
             // EMA 99 is the pattern engine's long-term trend filter.
-            let long = TournamentJourneyAnalyzer.ema(candles.map(\.close), period: TournamentJourneyAnalyzer.longPeriod)
+            let long = EMAJourneyAnalyzer.ema(candles.map(\.close), period: EMAJourneyAnalyzer.longPeriod)
             series = [JourneySeries(key: "ema99", title: "EMA 99", values: long)]
             if levels.isEmpty && markers.isEmpty {
                 let closed = candles.filter(\.isClosed)
@@ -85,11 +85,9 @@ enum ChartOverlayService {
     private static func emaSeries(candles: [PriceCandle]) -> [JourneySeries] {
         let closes = candles.map(\.close)
         return [
-            // The tournament model's chart: the 55-high entry line plus the
-            // EMA 25/99 regime pair. The EMA 7 retired with its engine.
-            donchianSeries(candles: candles, period: TournamentJourneyAnalyzer.breakoutPeriod),
-            JourneySeries(key: "ema25", title: "EMA 25", values: TournamentJourneyAnalyzer.ema(closes, period: TournamentJourneyAnalyzer.mediumPeriod)),
-            JourneySeries(key: "ema99", title: "EMA 99", values: TournamentJourneyAnalyzer.ema(closes, period: TournamentJourneyAnalyzer.longPeriod)),
+            JourneySeries(key: "ema7", title: "EMA 7", values: EMAJourneyAnalyzer.ema(closes, period: EMAJourneyAnalyzer.fastPeriod)),
+            JourneySeries(key: "ema25", title: "EMA 25", values: EMAJourneyAnalyzer.ema(closes, period: EMAJourneyAnalyzer.mediumPeriod)),
+            JourneySeries(key: "ema99", title: "EMA 99", values: EMAJourneyAnalyzer.ema(closes, period: EMAJourneyAnalyzer.longPeriod)),
         ]
     }
 
@@ -102,7 +100,7 @@ enum ChartOverlayService {
         }
         return JourneySeries(
             key: "donchianUpper",
-            title: L10n.text("Price Channel \(period)", "Fiyat Kanalı \(period)"),
+            title: "Donchian \(period)",
             values: values
         )
     }

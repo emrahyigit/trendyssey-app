@@ -2,15 +2,13 @@ import { json } from "../_shared/http.ts";
 import { adminClient } from "../_shared/supabase.ts";
 
 const allowedTimeframes = new Set(["15m", "30m", "1h", "2h", "4h", "6h", "1d"]);
-const allowedMarketStates = new Set([
-  "neutral",
-  "selling_dominant",
-  "seller_impact_fading",
-  "buy_side_absorption",
-  "bounce_attempt",
-  "bullish_confirmation",
-  "bullish_momentum",
-  "breakdown_risk",
+const allowedStatuses = new Set([
+  "pre_breakout",
+  "breakout_detected",
+  "confirmed",
+  "retest",
+  "failed",
+  "expired",
 ]);
 
 type SyncBody = {
@@ -21,7 +19,6 @@ type SyncBody = {
     minimumScore?: number;
     minimumRegimeScore?: number;
     minimumSignalStrength?: number;
-    aplusEntriesOnly?: boolean;
     minimumSuccessRate?: number;
     minimumReadinessScore?: number;
     minimumBreakoutQualityScore?: number;
@@ -29,10 +26,9 @@ type SyncBody = {
     maximumRisk: number;
     minimumVolumeRatio: number;
     minimumQuoteVolume24h?: number;
-    minimumStateScore?: number;
+    statuses: string[];
     alertScope: "favorites" | "all";
     preferredLanguage: "en" | "tr";
-    marketStates?: string[];
   };
   watchlist?: string[];
   device?: {
@@ -93,14 +89,12 @@ Deno.serve(async (req) => {
         p.minimumScore ?? 0;
       const minimumConfirmation = p.minimumConfirmationScore ?? 0;
       const minimumQuoteVolume24h = p.minimumQuoteVolume24h ?? 0;
-      const minimumStateScore = p.minimumStateScore ?? 0;
       if (
         !allowedTimeframes.has(p.preferredTimeframe) ||
         !validScore(minimumRegime) ||
         !validScore(minimumReadiness) ||
         !validScore(minimumQuality) ||
         !validScore(minimumConfirmation) ||
-        !validScore(minimumStateScore) ||
         !Number.isInteger(p.maximumRisk) || p.maximumRisk < 0 ||
         p.maximumRisk > 100 ||
         !Number.isFinite(p.minimumVolumeRatio) || p.minimumVolumeRatio < 0 ||
@@ -108,6 +102,9 @@ Deno.serve(async (req) => {
         !Number.isFinite(minimumQuoteVolume24h) ||
         minimumQuoteVolume24h < 0 ||
         minimumQuoteVolume24h > 1_000_000_000_000 ||
+        !Array.isArray(p.statuses) || p.statuses.some((status) =>
+          !allowedStatuses.has(status)
+        ) ||
         !["favorites", "all"].includes(p.alertScope) ||
         !["en", "tr"].includes(p.preferredLanguage)
       ) {
@@ -168,29 +165,15 @@ Deno.serve(async (req) => {
         preferred_analysis_model_id: requestedModel.id,
         minimum_breakout_score: minimumQuality,
         minimum_regime_score: minimumRegime,
-        minimum_signal_strength: Math.max(
-          0,
-          Math.min(100, Math.round(p.minimumSignalStrength ?? 0)),
-        ),
-        aplus_entries_only: false,
-        minimum_success_rate: Math.max(
-          0,
-          Math.min(100, Math.round(p.minimumSuccessRate ?? 0)),
-        ),
+        minimum_signal_strength: Math.max(0, Math.min(100, Math.round(p.minimumSignalStrength ?? 0))),
+        minimum_success_rate: Math.max(0, Math.min(100, Math.round(p.minimumSuccessRate ?? 0))),
         minimum_readiness_score: minimumReadiness,
         minimum_breakout_quality_score: minimumQuality,
         minimum_confirmation_score: minimumConfirmation,
         maximum_false_breakout_risk: p.maximumRisk,
         minimum_volume_ratio: p.minimumVolumeRatio,
         minimum_quote_volume_24h: minimumQuoteVolume24h,
-        minimum_state_score: minimumStateScore,
-        notification_market_states: [
-          ...new Set(
-            (p.marketStates ?? [...allowedMarketStates]).filter((state) =>
-              allowedMarketStates.has(state)
-            ),
-          ),
-        ],
+        notification_statuses: [...new Set(p.statuses)],
         notification_scope: p.alertScope,
         preferred_language: p.preferredLanguage,
         updated_at: new Date().toISOString(),

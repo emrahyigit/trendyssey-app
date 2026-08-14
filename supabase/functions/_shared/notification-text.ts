@@ -7,9 +7,8 @@
  * rows has to use this, or the push will keep saying something different from
  * what the app shows.
  *
- * The body exposes exactly two facts — the named current market state and 24h
- * dollar volume — so a lock-screen alert can be understood without opening
- * the detail screen.
+ * The body exposes the same four score layers used by profile filters, so a
+ * lock-screen alert can be understood without opening the detail screen.
  */
 
 export type Direction = "bullish" | "bearish";
@@ -19,10 +18,10 @@ export interface NotificationInput {
   baseAsset: string;
   /** Journey status, as stored in signal_journey_events. */
   status: string;
-  /** market_state_current.state; null while not yet measured. */
-  marketState: string | null;
-  stateScore: number | null;
-  stateScoreChange: number | null;
+  regimeScore: number;
+  readinessScore: number;
+  breakoutQualityScore: number;
+  confirmationScore: number;
   /** 24-hour quote volume in USD. */
   quoteVolume24h: number;
   /** Price at the transition. */
@@ -34,11 +33,9 @@ export interface NotificationInput {
 const PHASE_TR: Record<string, { bullish: string; bearish: string }> = {
   pre_breakout: { bullish: "Kırılım bekleniyor", bearish: "Düşüş bekleniyor" },
   breakout_detected: { bullish: "Kırılım başladı", bearish: "Düşüş başladı" },
-  confirmed: { bullish: "Kırılım tuttu", bearish: "Düşüş tuttu" },
-  failed: {
-    bullish: "Sinyal geçersiz (-%5)",
-    bearish: "Sinyal geçersiz (+%5)",
-  },
+  confirmed: { bullish: "Kırılım güçleniyor", bearish: "Düşüş güçleniyor" },
+  retest: { bullish: "Seviye test ediliyor", bearish: "Seviye test ediliyor" },
+  failed: { bullish: "Sinyal geçersiz oldu", bearish: "Sinyal geçersiz oldu" },
   expired: { bullish: "Takip tamamlandı", bearish: "Takip tamamlandı" },
 };
 
@@ -52,36 +49,12 @@ const PHASE_EN: Record<string, { bullish: string; bearish: string }> = {
     bearish: "Breakdown started",
   },
   confirmed: {
-    bullish: "Breakout held",
-    bearish: "Breakdown held",
+    bullish: "Breakout strengthening",
+    bearish: "Breakdown strengthening",
   },
-  failed: {
-    bullish: "Signal invalidated (-5%)",
-    bearish: "Signal invalidated (+5%)",
-  },
+  retest: { bullish: "Level being tested", bearish: "Level being tested" },
+  failed: { bullish: "Signal invalidated", bearish: "Signal invalidated" },
   expired: { bullish: "Tracking complete", bearish: "Tracking complete" },
-};
-
-const MARKET_STATE_TR: Record<string, string> = {
-  neutral: "Nötr",
-  selling_dominant: "Satış baskın",
-  seller_impact_fading: "Satıcı etkisi zayıflıyor",
-  buy_side_absorption: "Alıcı absorpsiyonu",
-  bounce_attempt: "Tepki denemesi",
-  bullish_confirmation: "Yukarı yönlü teyit",
-  bullish_momentum: "Güçlü yükseliş momentumu",
-  breakdown_risk: "Aşağı kırılım riski",
-};
-
-const MARKET_STATE_EN: Record<string, string> = {
-  neutral: "Neutral",
-  selling_dominant: "Selling dominant",
-  seller_impact_fading: "Seller impact fading",
-  buy_side_absorption: "Buy-side absorption",
-  bounce_attempt: "Bounce attempt",
-  bullish_confirmation: "Bullish confirmation",
-  bullish_momentum: "Strong bullish momentum",
-  breakdown_risk: "Breakdown risk",
 };
 
 /** Compact dollar volume: 1_234_567_890 -> "$1.23B". */
@@ -114,32 +87,17 @@ export function formatPrice(value: number): string {
 export function composeNotification(
   input: NotificationInput,
 ): { title: string; body: string } {
-  const stateTable = input.language === "tr"
-    ? MARKET_STATE_TR
-    : MARKET_STATE_EN;
-  const state = input.marketState === null
-    ? (input.language === "tr" ? "Durum güncelleniyor" : "State updating")
-    : (stateTable[input.marketState] ?? input.marketState);
-  const title = `${input.baseAsset} · ${state}`;
-  const volume = formatVolume(input.quoteVolume24h);
-  const strength = input.marketState === "neutral"
-    ? (input.language === "tr" ? "Aktif durum yok" : "No active state")
-    : input.stateScore === null
-    ? (input.language === "tr" ? "Güç ölçülüyor" : "Strength updating")
-    : (input.language === "tr"
-      ? `Güç ${Math.round(input.stateScore)}/100`
-      : `Strength ${Math.round(input.stateScore)}/100`);
-  const change = input.stateScoreChange === null
-    ? (input.language === "tr" ? "İlk ölçüm" : "First reading")
-    : input.stateScoreChange === 0
-    ? (input.language === "tr" ? "Değişim yok" : "No change")
-    : (input.language === "tr" ? "Değişim " : "Change ") +
-      `${input.stateScoreChange > 0 ? "+" : ""}${
-        Math.round(input.stateScoreChange)
-      }`;
+  const table = input.language === "tr" ? PHASE_TR : PHASE_EN;
+  const phase = table[input.status]?.[input.direction] ?? input.status;
+  const regime = Math.round(input.regimeScore);
+  const readiness = Math.round(input.readinessScore);
+  const quality = Math.round(input.breakoutQualityScore);
+  const confirmation = Math.round(input.confirmationScore);
+
+  const title = `${input.baseAsset} · ${phase}`;
   const body = input.language === "tr"
-    ? `${strength} · ${change} · 24s hacim ${volume}`
-    : `${strength} · ${change} · 24h volume ${volume}`;
+    ? `Rejim ${regime} · Hazırlık ${readiness} · Kalite ${quality} · Teyit ${confirmation}`
+    : `Regime ${regime} · Ready ${readiness} · Quality ${quality} · Confirm ${confirmation}`;
 
   return { title, body };
 }

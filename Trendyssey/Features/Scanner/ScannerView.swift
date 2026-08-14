@@ -2,23 +2,21 @@ import SwiftUI
 
 struct ScannerView: View {
     private enum SortOption: String, CaseIterable, Identifiable {
-        case state, absorption, pressure, volume, change
+        case strength, volume, change
 
         var id: Self { self }
         var title: String {
             switch self {
-            case .state: L10n.text("State strength", "Durum gücü")
-            case .absorption: L10n.text("Absorption", "Absorpsiyon")
-            case .pressure: L10n.text("Selling pressure", "Satış baskısı")
+            case .strength: L10n.text("Signal strength", "Sinyal gücü")
             case .volume: L10n.text("24h volume", "24s hacim")
             case .change: L10n.text("24h change", "24s değişim")
             }
         }
     }
 
-    private static let filterStates: [MarketStateKind] = [
-        .buySideAbsorption, .sellerImpactFading, .bounceAttempt,
-        .bullishConfirmation, .bullishMomentum, .sellingDominant, .breakdownRisk, .neutral
+    /// Journey statuses the server records, in journey order.
+    private static let filterStatuses: [SignalStatus] = [
+        .watching, .preBreakout, .breakoutDetected, .retest, .confirmed, .failed
     ]
 
     @Environment(AppEnvironment.self) private var environment
@@ -26,16 +24,23 @@ struct ScannerView: View {
     @State private var liveSignals: [MarketSignal] = []
     @State private var selectedSignal: MarketSignal?
     @State private var isLoading = true
-    @State private var stateFilter: MarketStateKind?
-    @State private var sortOption: SortOption = .state
+    @State private var statusFilter: SignalStatus?
+    @State private var sortOption: SortOption = .strength
     @AppStorage("preferredTimeframe") private var preferredTimeframe = "15m"
-    @AppStorage(JourneyModel.storageKey) private var journeyModel = JourneyModel.emaCross.rawValue
+    @AppStorage(JourneyModel.storageKey) private var journeyModel = JourneyModel.donchian20.rawValue
+
+    private var journeyDirection: JourneyDirection {
+        (JourneyModel(rawValue: journeyModel) ?? .donchian20).direction
+    }
+
+    // Filters and sorting run on the server-recorded phase and score — the
+    // same values the rows display and the pushes were sent from.
+    private func phase(for signal: MarketSignal) -> SignalStatus { signal.status }
 
     private func score(for signal: MarketSignal, option: SortOption) -> Int {
+        guard signal.hasScore else { return 0 }
         return switch option {
-        case .state: signal.marketState?.stateScore ?? 0
-        case .absorption: signal.marketState?.absorption ?? 0
-        case .pressure: signal.marketState?.sellingPressure ?? 0
+        case .strength: signal.relativeStrengthScore ?? 0
         case .volume, .change: 0
         }
     }
@@ -45,11 +50,11 @@ struct ScannerView: View {
             let matchesQuery = query.isEmpty
                 || signal.symbol.localizedCaseInsensitiveContains(query)
                 || signal.name.localizedCaseInsensitiveContains(query)
-            let matchesState = stateFilter.map { $0 == signal.marketState?.state } ?? true
-            return matchesQuery && matchesState
+            let matchesStatus = statusFilter.map { $0 == phase(for: signal) } ?? true
+            return matchesQuery && matchesStatus
         }
         switch sortOption {
-        case .state, .absorption, .pressure:
+        case .strength:
             return filtered.sorted {
                 let lhs = score(for: $0, option: sortOption)
                 let rhs = score(for: $1, option: sortOption)
@@ -81,7 +86,7 @@ struct ScannerView: View {
                     ContentUnavailableView(
                         L10n.text("No results", "Sonuç bulunamadı"),
                         systemImage: "line.3.horizontal.decrease.circle",
-                        description: Text(L10n.text("Try changing the search text or market-state filter.", "Arama metnini veya piyasa durumu filtresini değiştirmeyi deneyin."))
+                        description: Text(L10n.text("Try changing the search text or status filter.", "Arama metnini veya durum filtresini değiştirmeyi deneyin."))
                     )
                     .listRowBackground(TrendysseyColor.canvas)
                     .listRowSeparator(.hidden)
@@ -137,13 +142,13 @@ struct ScannerView: View {
                 HStack(spacing: 8) {
                     statusButton(
                         title: L10n.text("All", "Tümü"),
-                        isSelected: stateFilter == nil
-                    ) { stateFilter = nil }
-                    ForEach(Self.filterStates, id: \.self) { state in
+                        isSelected: statusFilter == nil
+                    ) { statusFilter = nil }
+                    ForEach(Self.filterStatuses, id: \.self) { status in
                         statusButton(
-                            title: state.title,
-                            isSelected: stateFilter == state
-                        ) { stateFilter = state }
+                            title: status.title(journeyDirection),
+                            isSelected: statusFilter == status
+                        ) { statusFilter = status }
                     }
                 }
             }

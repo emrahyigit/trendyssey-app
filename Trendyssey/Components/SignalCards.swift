@@ -1,22 +1,14 @@
 import SwiftUI
 import UIKit
 
-/// Badge for a 75+ confirmed reversal or strong bullish momentum state.
-struct APlusSetupBadge: View {
-    var body: some View {
-        Text(verbatim: "A+")
-            .font(.system(size: 11, weight: .black, design: .rounded))
-            .foregroundStyle(.black)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 3)
-            .background(TrendysseyColor.accent, in: Capsule())
-            .overlay(Capsule().stroke(.white.opacity(0.18), lineWidth: 0.5))
-            .accessibilityLabel(L10n.text("A+ setup", "A+ kurulum"))
-    }
-}
-
 struct FeaturedSignalCard: View {
     let signal: MarketSignal
+    @AppStorage(JourneyModel.storageKey) private var journeyModel = JourneyModel.donchian20.rawValue
+
+    // Phase and score come straight from the server's signal row — the same
+    // values that drove the push notification and the lists.
+    private var currentPhase: SignalStatus { signal.status }
+    private var direction: JourneyDirection { (JourneyModel(rawValue: journeyModel) ?? .donchian20).direction }
 
     var body: some View {
         SurfaceCard {
@@ -24,16 +16,8 @@ struct FeaturedSignalCard: View {
                 HStack {
                     SymbolMark(symbol: signal.baseSymbol, iconURL: signal.iconURL)
                     VStack(alignment: .leading, spacing: 2) {
-                        HStack(spacing: 6) {
-                            Text(signal.baseSymbol).font(.title2.bold())
-                            if signal.isAPlusSetup { APlusSetupBadge() }
-                        }
-                        if let state = signal.marketState {
-                            Text(state.state.title).font(.caption).foregroundStyle(state.state.color)
-                        } else {
-                            Text(L10n.text("State updating", "Durum güncelleniyor"))
-                                .font(.caption).foregroundStyle(TrendysseyColor.secondaryText)
-                        }
+                        Text(signal.baseSymbol).font(.title2.bold())
+                        Text(currentPhase.title(direction)).font(.caption).foregroundStyle(currentPhase == .watching ? TrendysseyColor.secondaryText : TrendysseyColor.positive)
                     }
                     Spacer()
                     VStack(alignment: .trailing, spacing: 2) {
@@ -45,37 +29,9 @@ struct FeaturedSignalCard: View {
                             .foregroundStyle(signal.change24h >= 0 ? TrendysseyColor.positive : TrendysseyColor.negative)
                     }
                 }
-                if let state = signal.marketState {
-                    MarketStateChip(snapshot: state)
-                }
+                SignalJourneyProgress(status: currentPhase, direction: direction, compact: true)
                 HStack(alignment: .bottom) {
-                    if let state = signal.marketState {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(state.hasActiveState
-                                 ? L10n.text("STATE STRENGTH", "DURUM GÜCÜ")
-                                 : L10n.text("CURRENT STATE", "GÜNCEL DURUM"))
-                                .font(.caption2.bold()).foregroundStyle(TrendysseyColor.secondaryText)
-                            if state.hasActiveState {
-                                Text("\(state.stateScore)")
-                                    .font(.system(size: 52, weight: .bold, design: .rounded))
-                                    .monospacedDigit()
-                                    .foregroundStyle(state.state.color)
-                                    + Text(" / 100").font(.subheadline).foregroundColor(TrendysseyColor.secondaryText)
-                            } else {
-                                Text(L10n.text("No active state", "Aktif durum yok"))
-                                    .font(.title2.bold())
-                                    .foregroundStyle(TrendysseyColor.secondaryText)
-                            }
-                        }
-                    } else {
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text(L10n.text("CURRENT STATE", "GÜNCEL DURUM"))
-                                .font(.caption2.bold()).foregroundStyle(TrendysseyColor.secondaryText)
-                            Text(L10n.text("Updating", "Güncelleniyor"))
-                                .font(.title2.bold())
-                                .foregroundStyle(TrendysseyColor.secondaryText)
-                        }
-                    }
+                    VStack(alignment: .leading, spacing: 3) { Text(L10n.text("SIGNAL STRENGTH", "SİNYAL GÜCÜ")).font(.caption2.bold()).foregroundStyle(TrendysseyColor.secondaryText); Text(signal.relativeStrengthScore.map { "\($0)" } ?? "—").font(.system(size: 52, weight: .bold, design: .rounded)).monospacedDigit() + Text(" / 100").font(.subheadline).foregroundColor(TrendysseyColor.secondaryText) }
                     Spacer()
                     VStack(alignment: .trailing, spacing: 3) {
                         Text(L10n.text("24H VOLUME", "24S HACİM"))
@@ -94,20 +50,18 @@ struct FeaturedSignalCard: View {
 
 struct SignalRow: View {
     let signal: MarketSignal
+    @AppStorage(JourneyModel.storageKey) private var journeyModel = JourneyModel.donchian20.rawValue
+
+    private var direction: JourneyDirection { (JourneyModel(rawValue: journeyModel) ?? .donchian20).direction }
 
     var body: some View {
         HStack(spacing: 13) {
             SymbolMark(symbol: signal.baseSymbol, iconURL: signal.iconURL)
             VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
-                    Text(signal.baseSymbol).font(.headline)
-                        .lineLimit(1).minimumScaleFactor(0.8)
-                    if signal.isAPlusSetup { APlusSetupBadge() }
-                }
+                Text(signal.baseSymbol).font(.headline)
                 if signal.hasScore {
-                    Text(signal.marketState?.state.title ?? L10n.text("State updating", "Durum güncelleniyor"))
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(signal.marketState?.state.color ?? TrendysseyColor.secondaryText)
+                    Text("\(signal.status.title(direction)) (\(signal.relativeStrengthScore.map { "\($0)" } ?? "—"))")
+                        .font(.caption.weight(.semibold)).foregroundStyle(strengthColor)
                         .lineLimit(1).minimumScaleFactor(0.8)
                 } else {
                     Label(L10n.text("Not enough volume to analyze", "Analiz için yeterli hacim yok"), systemImage: "antenna.radiowaves.left.and.right.slash")
@@ -129,6 +83,69 @@ struct SignalRow: View {
         signal.quoteVolume24h.formatted(.number.notation(.compactName).precision(.significantDigits(3)).locale(L10n.locale))
     }
 
+    private var strengthColor: Color {
+        guard signal.status != .watching, let strength = signal.relativeStrengthScore else {
+            return TrendysseyColor.secondaryText
+        }
+        return switch strength {
+        case 70...: TrendysseyColor.positive
+        case 40...: TrendysseyColor.warning
+        default: TrendysseyColor.negative
+        }
+    }
+}
+
+struct SignalJourneyProgress: View {
+    let status: SignalStatus
+    var direction: JourneyDirection = .bullish
+    var compact = false
+
+    private let stepCount = 5
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: compact ? 7 : 10) {
+            HStack(spacing: 8) {
+                Label(status.phaseTitle(direction), systemImage: "point.topleft.down.to.point.bottomright.curvepath")
+                    .font(compact ? .caption.weight(.semibold) : .subheadline.weight(.semibold))
+                    .foregroundStyle(TrendysseyColor.primaryText)
+                Spacer(minLength: 8)
+                Text(L10n.text("Step \(status.journeyStep + 1) of \(stepCount)", "Aşama \(status.journeyStep + 1)/\(stepCount)"))
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(TrendysseyColor.secondaryText)
+                    .monospacedDigit()
+            }
+            GeometryReader { proxy in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(TrendysseyColor.border)
+                    Capsule()
+                        .fill(progressColor)
+                        .frame(width: max(6, proxy.size.width * progress))
+                }
+            }
+            .frame(height: 6)
+            if !compact {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(status.title(direction)).font(.headline).foregroundStyle(progressColor)
+                    Text(status.journeyGuidance(direction))
+                        .font(.caption).foregroundStyle(TrendysseyColor.secondaryText).lineSpacing(3)
+                }
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private var progress: CGFloat {
+        CGFloat(status.journeyStep + 1) / CGFloat(stepCount)
+    }
+
+    private var progressColor: Color {
+        switch status {
+        case .confirmed, .retest: TrendysseyColor.positive
+        case .failed, .expired: TrendysseyColor.negative
+        case .watching: TrendysseyColor.secondaryText
+        case .preBreakout, .breakoutDetected: TrendysseyColor.accent
+        }
+    }
 }
 
 struct SymbolMark: View {
