@@ -9,6 +9,7 @@ struct TopPredictorsView: View {
     @State private var isSubmitting = false
     @State private var errorMessage: String?
     @State private var successMessage: String?
+    @State private var account: UserSyncService.AccountSnapshot = .anonymous
 
     private var selected: DailyPredictionSymbol? {
         symbols.first { $0.symbol == selectedSymbol }
@@ -109,8 +110,19 @@ struct TopPredictorsView: View {
                     .background(direction == .up ? TrendysseyColor.positive : TrendysseyColor.warning, in: RoundedRectangle(cornerRadius: 14))
                 }
                 .buttonStyle(.plain)
-                .disabled(selected == nil || isSubmitting)
+                .disabled(selected == nil || isSubmitting || account.isAnonymous)
+                .opacity(account.isAnonymous ? 0.5 : 1)
 
+                if account.isAnonymous {
+                    Label(
+                        L10n.text(
+                            "Connect your Apple account in Profile to join the daily game.",
+                            "Günlük oyuna katılmak için Profil'de Apple hesabını bağla."
+                        ),
+                        systemImage: "person.crop.circle.badge.exclamationmark"
+                    )
+                    .font(.caption).foregroundStyle(TrendysseyColor.secondaryText)
+                }
                 if let successMessage {
                     Label(successMessage, systemImage: "checkmark.circle.fill")
                         .font(.caption).foregroundStyle(TrendysseyColor.positive)
@@ -194,8 +206,10 @@ struct TopPredictorsView: View {
         isLoading = true
         defer { isLoading = false }
         let service = SignalPredictionService()
+        async let accountTask = UserSyncService.shared.accountSnapshot()
         async let predictorTask = try? service.topPredictors(limit: 10)
         async let symbolTask = try? service.predictionSymbols(limit: 100)
+        account = await accountTask
         if let loaded = await predictorTask { predictors = loaded }
         if let loaded = await symbolTask {
             symbols = loaded
@@ -215,19 +229,31 @@ struct TopPredictorsView: View {
                 "\(selected.baseAsset) call recorded at the live price.",
                 "\(selected.baseAsset) tahmini canlı fiyattan kaydedildi."
             )
-            predictors = try await SignalPredictionService().topPredictors(limit: 10)
         } catch SignalPredictionService.PredictionError.alreadyPredicted {
             errorMessage = L10n.text(
-                "You already called this coin today.",
-                "Bu coin için bugün zaten tahmin verdin."
+                "You already called \(selected.baseAsset) today. Each coin can be called once per UTC day.",
+                "\(selected.baseAsset) için bugün zaten tahmin verdin. Her coine bir UTC gününde bir kez oy verilebilir."
             )
         } catch SignalPredictionService.PredictionError.appleAccountRequired {
             errorMessage = L10n.text(
                 "Connect your Apple account to join the leaderboard.",
                 "Sıralamaya katılmak için Apple hesabını bağla."
             )
+        } catch SignalPredictionService.PredictionError.rejected(let reason) {
+            errorMessage = L10n.text(
+                "Prediction was rejected: \(reason)",
+                "Tahmin reddedildi: \(reason)"
+            )
         } catch {
-            errorMessage = L10n.text("Prediction could not be saved.", "Tahmin kaydedilemedi.")
+            let detail = SignalPredictionService.transportDetail(error)
+            errorMessage = L10n.text(
+                "Prediction could not be sent (\(detail)).",
+                "Tahmin gönderilemedi (\(detail))."
+            )
+        }
+        // The leaderboard refresh must never turn a saved call into an error.
+        if let refreshed = try? await SignalPredictionService().topPredictors(limit: 10) {
+            predictors = refreshed
         }
     }
 

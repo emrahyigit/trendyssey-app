@@ -98,24 +98,18 @@ actor SignalPredictionService {
         )
     }
 
+    /// A chat vote is a directional call like any other, so it goes through the
+    /// same endpoint as the daily game and lands on the same leaderboard. The
+    /// journey is passed along only so the accuracy badge can resolve it.
     func submit(journeyID: UUID, symbol: String, timeframe: String, holds: Bool) async throws {
         let account = await UserSyncService.shared.accountSnapshot()
-        guard let userID = account.id, !account.isAnonymous else { throw PredictionError.appleAccountRequired }
-        var request = try await authorizedRequest(url: SupabaseConfig.projectURL.appending(path: "rest/v1/signal_predictions"))
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("return=minimal", forHTTPHeaderField: "Prefer")
-        request.httpBody = try JSONSerialization.data(withJSONObject: [
-            "user_id": userID.uuidString,
+        guard account.id != nil, !account.isAnonymous else { throw PredictionError.appleAccountRequired }
+        try await postPrediction([
             "symbol": symbol.uppercased(),
-            "journey_id": journeyID.uuidString.lowercased(),
+            "journeyId": journeyID.uuidString.lowercased(),
             "timeframe": timeframe,
             "prediction": holds ? "holds" : "fails",
         ])
-        let (_, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse else { throw PredictionError.requestFailed }
-        if http.statusCode == 409 { throw PredictionError.alreadyPredicted }
-        guard 200..<300 ~= http.statusCode else { throw PredictionError.requestFailed }
     }
 
     private struct TopPredictorRow: Decodable {
@@ -224,18 +218,65 @@ actor SignalPredictionService {
         guard account.id != nil, !account.isAnonymous else {
             throw PredictionError.appleAccountRequired
         }
-        var request = try await authorizedRequest(url: SupabaseConfig.projectURL.appending(path: "functions/v1/daily-prediction"))
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: [
+        try await postPrediction([
             "symbol": symbol.uppercased(),
             "direction": direction.rawValue
         ])
-        let (_, response) = try await URLSession.shared.data(for: request)
+    }
+
+    /// One writer for every directional call. The server owns the entry price
+    /// and the one-per-coin-per-UTC-day rule.
+    private func postPrediction(_ body: [String: String]) async throws {
+        var request = try await authorizedRequest(url: SupabaseConfig.projectURL.appending(path: "functions/v1/daily-prediction"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw PredictionError.requestFailed }
         if http.statusCode == 409 { throw PredictionError.alreadyPredicted }
         if http.statusCode == 403 { throw PredictionError.appleAccountRequired }
-        guard 200..<300 ~= http.statusCode else { throw PredictionError.requestFailed }
+        guard 200..<300 ~= http.statusCode else {
+            // Carry the server's own reason through. A blanket "could not be
+            // saved" hides which rule actually rejected the call.
+            throw PredictionError.rejected(
+                Self.serverReason(data) ?? "HTTP \(http.statusCode)"
+            )
+        }
+    }
+
+    /// Names the transport failure behind a request that never produced an
+    /// HTTP status, so "check your connection" stops hiding timeouts and TLS
+    /// errors behind one another.
+    static func transportDetail(_ error: Error) -> String {
+        if let urlError = error as? URLError {
+            let name = switch urlError.code {
+            case .timedOut: "timeout"
+            case .notConnectedToInternet: "offline"
+            case .networkConnectionLost: "connection lost"
+            case .cannotFindHost, .cannotConnectToHost, .dnsLookupFailed: "host unreachable"
+            case .userAuthenticationRequired: "session rejected"
+            case .secureConnectionFailed, .serverCertificateUntrusted: "TLS"
+            default: "URLError"
+            }
+            return "\(name) \(urlError.code.rawValue)"
+        }
+        return "\(error)"
+    }
+
+    /// The edge function (`{"error":{"code","message"}}`), the gateway and
+    /// PostgREST (`{"code","message","hint"}`) all describe a rejection in the
+    /// body. A trigger's `raise exception` arrives here as its message.
+    private static func serverReason(_ data: Data) -> String? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        let payload = root["error"] as? [String: Any] ?? root
+        let message = payload["message"] as? String
+        let code = payload["code"] as? String
+        switch (message, code) {
+        case let (message?, code?): return "\(message) (\(code))"
+        case let (message?, nil): return message
+        case let (nil, code?): return code
+        default: return nil
+        }
     }
 
     /// Every prediction on a journey, so screens can weigh them by predictor.
@@ -294,5 +335,11 @@ actor SignalPredictionService {
         return formatter
     }()
 
-    enum PredictionError: Error { case appleAccountRequired, alreadyPredicted, requestFailed }
+    enum PredictionError: Error {
+        case appleAccountRequired
+        case alreadyPredicted
+        case requestFailed
+        /// The server refused the call and said why.
+        case rejected(String)
+    }
 }

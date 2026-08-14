@@ -1,7 +1,24 @@
+// The single entry point for saving a directional call, from either surface:
+// the daily game's up/down picker or the coin chat's Holds/Fails bar. Both
+// write the same daily_predictions row, so one leaderboard scores every call.
+// A chat vote additionally records its journey in signal_predictions, which is
+// what the per-user accuracy badge reads.
+//
+// Every breakout signal is direction 'up', so "holds" means the coin rises and
+// "fails" means it does not.
 import { json } from "../_shared/http.ts";
 import { adminClient } from "../_shared/supabase.ts";
 
-type Body = { symbol?: string; direction?: string };
+type Body = {
+  symbol?: string;
+  direction?: string;
+  journeyId?: string;
+  prediction?: string;
+  timeframe?: string;
+};
+
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 Deno.serve(async (req) => {
   if (req.method !== "POST") {
@@ -34,10 +51,19 @@ Deno.serve(async (req) => {
   try {
     const body = await req.json() as Body;
     const symbol = String(body.symbol ?? "").trim().toUpperCase();
-    const direction = String(body.direction ?? "").trim().toLowerCase();
+    const vote = String(body.prediction ?? "").trim().toLowerCase();
+    // A chat vote names the outcome; the daily picker names the direction.
+    const direction = vote === "holds"
+      ? "up"
+      : vote === "fails"
+      ? "down"
+      : String(body.direction ?? "").trim().toLowerCase();
+    const journeyID = String(body.journeyId ?? "").trim().toLowerCase();
+    const timeframe = String(body.timeframe ?? "15m").trim();
     if (
       !/^[A-Z0-9]{2,20}USDT$/.test(symbol) ||
-      !["up", "down"].includes(direction)
+      !["up", "down"].includes(direction) ||
+      (journeyID !== "" && !UUID_PATTERN.test(journeyID))
     ) {
       return json({
         error: { code: "INVALID_PREDICTION", message: "Tahmin geçersiz." },
@@ -85,7 +111,32 @@ Deno.serve(async (req) => {
         },
       }, 409);
     }
+    // daily_predictions.user_id points at profiles, which sync-user creates.
+    // Say so plainly instead of surfacing a foreign-key error as a 500.
+    if (insert.error?.code === "23503") {
+      return json({
+        error: {
+          code: "PROFILE_REQUIRED",
+          message: "Profil oluşturulmadan tahmin kaydedilemez.",
+        },
+      }, 409);
+    }
     if (insert.error) throw insert.error;
+
+    // The journey link only feeds the accuracy badge. It must never fail the
+    // call that already counts for the leaderboard.
+    if (journeyID && vote) {
+      const journeyInsert = await supabase.from("signal_predictions").insert({
+        user_id: auth.user.id,
+        symbol,
+        journey_id: journeyID,
+        timeframe,
+        prediction: vote,
+      });
+      if (journeyInsert.error && journeyInsert.error.code !== "23505") {
+        console.error("journey_prediction_link_failed", journeyInsert.error);
+      }
+    }
 
     return json({
       data: {

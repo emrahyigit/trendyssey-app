@@ -234,8 +234,14 @@ struct CoinChatView: View {
             errorMessage = nil
         } catch SignalPredictionService.PredictionError.alreadyPredicted {
             predictionTally = try? await predictionService.tally(journeyID: journeyID)
+        } catch SignalPredictionService.PredictionError.rejected(let reason) {
+            errorMessage = L10n.text("Prediction was rejected: \(reason)", "Tahmin reddedildi: \(reason)")
         } catch {
-            errorMessage = L10n.text("Prediction could not be saved.", "Tahmin kaydedilemedi.")
+            let detail = SignalPredictionService.transportDetail(error)
+            errorMessage = L10n.text(
+                "Prediction could not be sent (\(detail)).",
+                "Tahmin gönderilemedi (\(detail))."
+            )
         }
         isSubmittingPrediction = false
     }
