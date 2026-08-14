@@ -21,47 +21,47 @@ enum LegalCopy {
     static var methodology: LegalDocument {
         LegalDocument(
             summary: L10n.text(
-                "How Trendyssey turns Binance Spot candles into a breakout journey and four separate scores — and what those scores do not claim to be.",
-                "Trendyssey'in Binance Spot mumlarını nasıl bir kırılım sürecine ve birbirinden ayrı dört puana dönüştürdüğü — ve bu puanların ne iddia etmediği."
+                "How Trendyssey turns Binance Spot candles into current market states and historical scenarios — and what those observations do not claim to be.",
+                "Trendyssey'in Binance Spot mumlarını güncel piyasa durumlarına ve geçmiş senaryolara nasıl dönüştürdüğü — ve bu gözlemlerin ne iddia etmediği."
             ),
             sections: [
                 .init(
                     heading: L10n.text("Where the data comes from", "Veri nereden geliyor"),
                     paragraphs: [
                         L10n.text(
-                            "Trendyssey analyses publicly available Binance Spot market data. Server models use completed candles only; the app reads the stored signal and score instead of producing a second competing result.",
-                            "Trendyssey, Binance Spot üzerindeki herkese açık piyasa verilerini analiz eder. Sunucu modelleri yalnızca tamamlanmış mumları kullanır; uygulama ikinci ve çelişebilecek bir sonuç üretmek yerine kaydedilmiş sinyal ile puanları okur."
+                            "Trendyssey analyses publicly available Binance Spot market data. Server models use completed candles only; the app reads the stored signal and market state instead of producing a second competing result.",
+                            "Trendyssey, Binance Spot üzerindeki herkese açık piyasa verilerini analiz eder. Sunucu modelleri yalnızca tamamlanmış mumları kullanır; uygulama ikinci ve çelişebilecek bir sonuç üretmek yerine kaydedilmiş sinyal ile piyasa durumunu okur."
                         )
                     ]
                 ),
                 .init(
-                    heading: L10n.text("The six breakout models", "Altı kırılım modeli"),
+                    heading: L10n.text("Current market state", "Güncel piyasa durumu"),
                     paragraphs: [
                         L10n.text(
-                            "You pick one model in Profile. It drives every journey, score and chart overlay in the app.",
-                            "Profil'den tek bir model seçersiniz. Uygulamadaki her süreç, puan ve grafik katmanı ona göre çalışır."
+                            "For every scanned coin and timeframe, Trendyssey reports the current balance between selling pressure and price response. The named state is the primary answer; its component measurements remain visible so the result can be inspected instead of accepted as a black box.",
+                            "Trendyssey, taranan her coin ve zaman dilimi için satış baskısı ile fiyat tepkisi arasındaki güncel dengeyi raporlar. Ana cevap isimlendirilmiş durumdur; sonuç kara kutu olarak kabul edilmesin diye bileşen ölçümleri ayrıca gösterilir."
                         )
                     ],
                     bullets: [
                         L10n.text(
-                            "Donchian 20 and Donchian 50 — objective price-channel breakouts over two different completed-candle windows.",
-                            "Donchian 20 ve Donchian 50 — iki farklı tamamlanmış mum penceresindeki nesnel fiyat kanalı kırılımlarıdır."
+                            "Selling pressure and downside response — whether elevated selling is still pushing price lower.",
+                            "Satış baskısı ve aşağı yönlü tepki — yüksek satışın fiyatı hâlâ aşağı itip itmediği."
                         ),
                         L10n.text(
-                            "Horizontal Level — groups confirmed pivot highs into ATR-sized resistance zones.",
-                            "Yatay Seviye — doğrulanmış pivot tepelerini ATR genişliğinde direnç bölgelerinde kümeler."
+                            "Seller efficiency — how much downside movement sellers produce, and whether that impact is strengthening or fading.",
+                            "Satıcı etkinliği — satıcıların ne kadar aşağı yönlü hareket ürettiği ve bu etkinin güçlenip zayıflamadığı."
                         ),
                         L10n.text(
-                            "Consolidation — follows volatility expansion above the upper boundary of a compact range.",
-                            "Konsolidasyon — dar bir aralığın üst sınırı üzerindeki volatilite genişlemesini izler."
+                            "Buy-side absorption and price resilience — whether supply is being absorbed without equivalent price damage.",
+                            "Alıcı absorpsiyonu ve fiyat dayanıklılığı — arzın aynı ölçüde fiyat hasarı oluşturmadan karşılanıp karşılanmadığı."
                         ),
                         L10n.text(
-                            "Double Bottom — finds two lows at a similar level and follows the break above the neckline between them. A rising move.",
-                            "Çift Dip — benzer seviyedeki iki dibi bulur ve aralarındaki boyun çizgisinin yukarı kırılmasını izler. Yükseliş yönlü bir modeldir."
+                            "Bounce readiness and confirmation — whether an early response has begun and whether closed candles have confirmed it.",
+                            "Tepki hazırlığı ve teyit — erken tepkinin başlayıp başlamadığı ve kapanmış mumların bunu doğrulayıp doğrulamadığı."
                         ),
                         L10n.text(
-                            "Double Top — the mirror image: two highs at a similar level, then the break below the neckline. A falling move, so its phases read as a breakdown and a fall counts as the model being right.",
-                            "Çift Tepe — bunun aynadaki hâli: benzer seviyedeki iki tepe ve ardından boyun çizgisinin aşağı kırılması. Düşüş yönlüdür; aşamaları düşüş olarak okunur ve fiyatın düşmesi modelin doğru bilmesi anlamına gelir."
+                            "Bullish momentum — whether price is already advancing with sustained multi-candle strength, expanding activity and direct closed-candle confirmation.",
+                            "Yükseliş momentumu — fiyatın çoklu mum gücü, genişleyen aktivite ve doğrudan kapanış teyidiyle hâlihazırda yükselip yükselmediği."
                         )
                     ]
                 ),
@@ -75,49 +75,15 @@ enum LegalCopy {
                     ]
                 ),
                 .init(
-                    heading: L10n.text("The breakout journey", "Kırılım süreci"),
+                    heading: L10n.text("What the backtest showed", "Backtest ne gösterdi"),
                     paragraphs: [
                         L10n.text(
-                            "Whichever model you choose, its findings are reported through the same five phases, so the app reads the same way after you switch.",
-                            "Hangi modeli seçerseniz seçin, bulgular aynı beş aşamayla raporlanır; model değiştirdiğinizde uygulamanın dili değişmez."
-                        )
-                    ],
-                    bullets: [
-                        L10n.text("Being watched — conditions are being monitored.", "İzleniyor — koşullar takip ediliyor."),
-                        L10n.text("Waiting for breakout — price is close to the tracked level.", "Kırılım bekleniyor — fiyat izlenen seviyeye yaklaştı."),
-                        L10n.text("Breakout started — a closed candle cleared the level.", "Kırılım başladı — kapanmış bir mum seviyeyi geçti."),
-                        L10n.text("Level being tested — price came back to the level after clearing it.", "Seviye test ediliyor — fiyat geçtiği seviyeye geri döndü."),
-                        L10n.text("Breakout strengthening — the level held, or three closes stayed beyond it.", "Kırılım güçleniyor — seviye korundu veya üç kapanış onun ötesinde kaldı."),
-                        L10n.text("Signal invalidated — price closed back through the level and the journey ended.", "Sinyal geçersiz oldu — fiyat seviyeyi geri kırdı ve süreç sonlandı.")
-                    ]
-                ),
-                .init(
-                    heading: L10n.text("The four scores", "Dört puan"),
-                    paragraphs: [
-                        L10n.text(
-                            "Each signal gets four 0–100 scores: regime suitability, breakout readiness, breakout quality and post-breakout confirmation. A trigger is a closed-candle fact, not a fifth score.",
-                            "Her sinyal 0–100 arası dört puan alır: rejim uygunluğu, kırılım hazırlığı, kırılım kalitesi ve kırılım sonrası teyit. Tetik, kapanmış muma dayanan bir olgudur; beşinci bir puan değildir."
+                            "Historical simulations help compare signal and exit rules, but the current-state model is evaluated separately against later price behaviour. Two honest caveats: short timeframes are especially sensitive to fees and noise, and past behaviour, however carefully measured, does not bind the future.",
+                            "Tarihsel simülasyonlar sinyal ve çıkış kurallarını karşılaştırmaya yardımcı olur; güncel durum modeli ise sonraki fiyat davranışına karşı ayrıca değerlendirilir. İki dürüst uyarı: kısa zaman dilimleri komisyon ve gürültüye özellikle duyarlıdır; geçmiş davranış ne kadar özenle ölçülürse ölçülsün geleceği bağlamaz."
                         ),
                         L10n.text(
-                            "Regime reads EMA structure, slopes and ADX. Readiness reads proximity, compression and level tests. Breakout quality reads the closed-candle clearance, relative volume, body, wick, level quality, trend and BTC alignment. Confirmation reads whether price held or retested the broken level.",
-                            "Rejim; EMA yapısını, eğimleri ve ADX'i okur. Hazırlık; seviyeye yakınlığı, sıkışmayı ve seviye testlerini okur. Kırılım kalitesi; kapanış mesafesini, göreli hacmi, gövdeyi, fitili, seviye kalitesini, trendi ve BTC uyumunu okur. Teyit ise fiyatın kırılan seviyeyi koruyup korumadığını veya yeniden test edip etmediğini okur."
-                        ),
-                        L10n.text(
-                            "These scores are deterministic summaries of current market structure. None is a calibrated success probability, forecast or guarantee.",
-                            "Bu puanlar mevcut piyasa yapısının deterministik özetleridir. Hiçbiri kalibre edilmiş başarı olasılığı, tahmin veya garanti değildir."
-                        )
-                    ]
-                ),
-                .init(
-                    heading: L10n.text("Measuring what happened", "Ne olduğunun ölçümü"),
-                    paragraphs: [
-                        L10n.text(
-                            "After a breakout is detected, Trendyssey records return, maximum favourable excursion and maximum adverse excursion over defined candle horizons. Model variants must be compared over the same coins, candles, horizons and market regimes.",
-                            "Kırılım algılandıktan sonra Trendyssey; tanımlı mum ufuklarında getiriyi, maksimum olumlu hareketi (MFE) ve maksimum olumsuz hareketi (MAE) kaydeder. Model varyantları aynı coinler, mumlar, ufuklar ve piyasa rejimleri üzerinde karşılaştırılmalıdır."
-                        ),
-                        L10n.text(
-                            "Read those win rates against 50%, which is what a coin flip would produce. A model only has an edge above that line, and a rate resting on a handful of measurements is not yet evidence of anything.",
-                            "Bu kazanma oranlarını %50 ile karşılaştırarak okuyun; yazı tura bu oranı üretir. Bir modelin üstünlüğünden ancak bu çizginin üzerinde söz edilebilir ve avuç içi kadar ölçüme dayanan bir oran henüz hiçbir şeyin kanıtı değildir."
+                            "A market state is a deterministic description of current conditions. It is not a calibrated success probability, a forecast or a guarantee — and an early reversal state does not mean a coin will rise.",
+                            "Piyasa durumu, mevcut koşulların deterministik bir tarifidir. Kalibre edilmiş bir başarı olasılığı, tahmin veya garanti değildir — erken dönüş durumu coinin yükseleceği anlamına gelmez."
                         )
                     ]
                 ),

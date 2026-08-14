@@ -3,7 +3,6 @@ import SwiftUI
 struct CoinChatPreview: View {
     let symbol: String
     var journeyID: UUID? = nil
-    var journeyPhase: SignalStatus? = nil
     @State private var messages: [CoinChatMessage] = []
     @State private var loaded = false
     @AppStorage("appLanguage") private var appLanguage = AppLanguage.default.rawValue
@@ -12,7 +11,7 @@ struct CoinChatPreview: View {
     private var language: AppLanguage { AppLanguage(rawValue: appLanguage) ?? .english }
 
     var body: some View {
-        NavigationLink { CoinChatView(symbol: symbol, journeyID: journeyID, journeyPhase: journeyPhase) } label: {
+        NavigationLink { CoinChatView(symbol: symbol, journeyID: journeyID) } label: {
             VStack(alignment: .leading, spacing: 13) {
                 HStack {
                     Label(L10n.text("Community", "Topluluk"), systemImage: "bubble.left.and.bubble.right.fill")
@@ -63,7 +62,6 @@ struct CoinChatPreview: View {
 struct CoinChatView: View {
     let symbol: String
     var journeyID: UUID? = nil
-    var journeyPhase: SignalStatus? = nil
     @State private var messages: [CoinChatMessage] = []
     @State private var draft = ""
     @State private var account: UserSyncService.AccountSnapshot = .anonymous
@@ -81,8 +79,7 @@ struct CoinChatView: View {
     private var language: AppLanguage { AppLanguage(rawValue: appLanguage) ?? .english }
 
     private var showsPredictionBar: Bool {
-        guard journeyID != nil, let journeyPhase else { return false }
-        return [.preBreakout, .breakoutDetected, .retest, .confirmed].contains(journeyPhase)
+        journeyID != nil
     }
 
     var body: some View {
@@ -169,7 +166,7 @@ struct CoinChatView: View {
     private var predictionBar: some View {
         VStack(alignment: .leading, spacing: 9) {
             HStack {
-                Label(L10n.text("Will this breakout hold?", "Bu kırılım tutar mı?"), systemImage: "questionmark.circle.fill")
+                Label(L10n.text("Will the current state strengthen?", "Güncel durum güçlenecek mi?"), systemImage: "questionmark.circle.fill")
                     .font(.caption.weight(.bold))
                 Spacer()
                 if let mine = predictionTally?.mine {
@@ -196,8 +193,8 @@ struct CoinChatView: View {
                 )
             }
             Text(L10n.text(
-                "Resolved automatically when the journey strengthens or fails. Your accuracy becomes a badge next to your name.",
-                "Süreç güçlendiğinde veya geçersiz olduğunda otomatik sonuçlanır. İsabet oranın adının yanında rozete dönüşür."
+                "Resolved automatically from the following price outcome. Your accuracy becomes a badge next to your name.",
+                "Sonraki fiyat sonucuna göre otomatik çözülür. İsabet oranın adının yanında rozete dönüşür."
             ))
             .font(.caption2).foregroundStyle(TrendysseyColor.secondaryText)
         }

@@ -27,37 +27,33 @@ Deno.test("price keeps precision for cheap coins", () => {
   assertEqual(formatPrice(0.00004212), "$0.000042", "sub-cent");
 });
 
-Deno.test("body carries all four score layers", () => {
+Deno.test("body carries market state and 24h volume, nothing else", () => {
   const { title, body } = composeNotification({
     baseAsset: "SOL",
     status: "breakout_detected",
-    regimeScore: 72,
-    readinessScore: 84,
-    breakoutQualityScore: 78.4,
-    confirmationScore: 35,
+    marketState: "buy_side_absorption",
+    stateScore: 74,
+    stateScoreChange: 6,
     quoteVolume24h: 1_234_567_890,
     price: 167.42,
     direction: "bullish",
     language: "tr",
   });
-  assertEqual(title, "SOL · Kırılım başladı", "title");
-  assertEqual(
-    body,
-    "Rejim 72 · Hazırlık 84 · Kalite 78 · Teyit 35",
-    "body",
-  );
+  assertEqual(title, "SOL · Alıcı absorpsiyonu", "title");
+  assertEqual(body, "Güç 74/100 · Değişim +6 · 24s hacim $1.23B", "body");
   if (/risk/i.test(body)) throw new Error("risk must not appear in the body");
-  if (/\dx\b/.test(body)) throw new Error("volume must not be a multiple");
+  if (/Rejim|Hazırlık|Kalite|Teyit/.test(body)) {
+    throw new Error("legacy score layers must not appear in the body");
+  }
 });
 
 Deno.test("the english body uses the same format", () => {
   const { body } = composeNotification({
     baseAsset: "SOL",
     status: "breakout_detected",
-    regimeScore: 55,
-    readinessScore: 70,
-    breakoutQualityScore: 60,
-    confirmationScore: 35,
+    marketState: "seller_impact_fading",
+    stateScore: 68,
+    stateScoreChange: -4,
     quoteVolume24h: 4_130_000,
     price: 0.001812,
     direction: "bullish",
@@ -65,23 +61,41 @@ Deno.test("the english body uses the same format", () => {
   });
   assertEqual(
     body,
-    "Regime 55 · Ready 70 · Quality 60 · Confirm 35",
+    "Strength 68/100 · Change -4 · 24h volume $4.13M",
     "en body",
   );
 });
 
-Deno.test("a bearish model reads as a breakdown", () => {
+Deno.test("an unmeasured state says it is updating", () => {
+  const { body } = composeNotification({
+    baseAsset: "SOL",
+    status: "breakout_detected",
+    marketState: null,
+    stateScore: null,
+    stateScoreChange: null,
+    quoteVolume24h: 4_130_000,
+    price: 0.001812,
+    direction: "bullish",
+    language: "tr",
+  });
+  assertEqual(
+    body,
+    "Güç ölçülüyor · İlk ölçüm · 24s hacim $4.13M",
+    "unmeasured body",
+  );
+});
+
+Deno.test("the title names the current state", () => {
   const { title } = composeNotification({
     baseAsset: "AVAX",
     status: "breakout_detected",
-    regimeScore: 50,
-    readinessScore: 66,
-    breakoutQualityScore: 61,
-    confirmationScore: 35,
+    marketState: "breakdown_risk",
+    stateScore: 82,
+    stateScoreChange: 9,
     quoteVolume24h: 42_000_000,
     price: 23.48,
     direction: "bearish",
     language: "en",
   });
-  assertEqual(title, "AVAX · Breakdown started", "bearish title");
+  assertEqual(title, "AVAX · Breakdown risk", "state title");
 });

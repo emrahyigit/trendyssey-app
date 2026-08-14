@@ -1,7 +1,7 @@
 import Foundation
 
-/// Detects Double Bottom and Double Top reversals and maps them onto the same
-/// Breakout Journey lifecycle the EMA model uses:
+/// Detects Double Bottom and Double Top reversals. Its private detector phases
+/// are retained only to build chart evidence; they are not product states.
 ///
 /// - `watching`      the two pivots formed, price is still far from the neckline
 /// - `preBreakout`   price closed inside the approach band under/over the neckline
@@ -60,9 +60,9 @@ enum DoublePatternAnalyzer {
         guard candles.count >= minSeparation + pivotWindow * 2 + 5 else { return nil }
         let volumeRatio = JourneyAnalyzer.latestVolumeRatio(candles: candles)
         let model: JourneyModel = direction == .bullish ? .doubleBottom : .doubleTop
-        let emaLong = EMAJourneyAnalyzer.ema(candles.map(\.close), period: EMAJourneyAnalyzer.longPeriod)
+        let emaLong = TournamentJourneyAnalyzer.ema(candles.map(\.close), period: TournamentJourneyAnalyzer.longPeriod)
         let trendSeries = [JourneySeries(key: "ema99", title: "EMA 99", values: emaLong)]
-        let confluence = EMAJourneyAnalyzer.confluenceFactor(
+        let confluence = TournamentJourneyAnalyzer.confluenceFactor(
             direction: direction,
             higherTimeframeCandles: higherTimeframeCandles,
             higherTimeframeTitle: higherTimeframeTitle
@@ -124,6 +124,7 @@ enum DoublePatternAnalyzer {
             phase: phase,
             breakoutIndex: breakoutIndex,
             retestHeld: retestHeld,
+            retesting: current.retesting,
             volumeRatio: volumeRatio
         )
         if let confluence {
@@ -141,7 +142,7 @@ enum DoublePatternAnalyzer {
         let stageScore: Int = switch phase {
         case .watching, .preBreakout: scoreLayers.readinessScore
         case .breakoutDetected, .failed, .expired: scoreLayers.breakoutQualityScore
-        case .confirmed, .retest: scoreLayers.confirmationScore
+        case .confirmed: scoreLayers.confirmationScore
         }
 
         return JourneyAnalysis(
@@ -257,8 +258,8 @@ enum DoublePatternAnalyzer {
         let levelHeld = direction == .bullish
             ? current.close > pattern.neckline
             : current.close < pattern.neckline
-        let retestEvidence = walk.retestHeld ? 1.0 : phase == .retest ? 0.5 : 0
-        let phaseProgress = phase == .confirmed ? 1.0 : phase == .retest ? 0.5 : 0.25
+        let retestEvidence = walk.retestHeld ? 1.0 : walk.retesting ? 0.5 : 0
+        let phaseProgress = phase == .confirmed ? 1.0 : walk.retesting ? 0.5 : 0.25
         let continuation = clamp(
             (direction == .bullish
                 ? current.close - breakoutCandle.close
@@ -269,7 +270,7 @@ enum DoublePatternAnalyzer {
             0.25 * (levelHeld ? 1 : 0) + 0.25 * heldCloses +
             0.25 * retestEvidence + 0.15 * phaseProgress + 0.10 * continuation
         )).rounded())
-        let breakoutTriggered = phase == .breakoutDetected || phase == .retest || phase == .confirmed
+        let breakoutTriggered = phase == .breakoutDetected || phase == .confirmed
 
         return SignalScoreLayers(
             regimeScore: regimeScore,
@@ -391,6 +392,9 @@ enum DoublePatternAnalyzer {
         let phase: SignalStatus
         let breakoutIndex: Int?
         let retestHeld: Bool
+        /// Price is at the neckline right now with the outcome still open.
+        /// Tracked as evidence only; it is no longer a lifecycle phase.
+        let retesting: Bool
     }
 
     /// One walk per pattern. Each walk stops where the next pattern's walk begins,
@@ -426,6 +430,7 @@ enum DoublePatternAnalyzer {
         var events: [JourneyEvent] = []
         var breakoutIndex: Int?
         var retestHeld = false
+        var retesting = false
         var closesBackThrough = 0
         // A neckline break usually starts right at the neckline, so the candle
         // after it almost always wicks back to that level. Only once price has
@@ -437,7 +442,7 @@ enum DoublePatternAnalyzer {
         // The second pivot is only a pivot once `pivotWindow` candles closed after it.
         let start = pattern.secondIndex + pivotWindow
         guard start < endIndex else {
-            return JourneyWalk(events: [], phase: .watching, breakoutIndex: nil, retestHeld: false)
+            return JourneyWalk(events: [], phase: .watching, breakoutIndex: nil, retestHeld: false, retesting: false)
         }
 
         for index in start..<endIndex {
@@ -470,24 +475,26 @@ enum DoublePatternAnalyzer {
                         : (candle.close - neckline) / neckline
                     newState = (distance >= 0 && distance <= approachBand) ? .preBreakout : .watching
                 }
-            case .breakoutDetected, .retest, .confirmed:
+            case .breakoutDetected, .confirmed:
                 if closedBackThrough {
                     closesBackThrough += 1
                     if closesBackThrough >= 2 {
                         newState = .failed
                         breakoutIndex = nil
-                    } else if state != .retest {
-                        newState = .retest
+                        retesting = false
+                    } else {
+                        retesting = true
                     }
                 } else {
                     closesBackThrough = 0
-                    if state == .retest, clearedNeckline {
+                    if retesting, clearedNeckline {
                         retestHeld = true
+                        retesting = false
                         newState = .confirmed
-                    } else if state != .retest, clearedByMargin, touchedNeckline {
+                    } else if !retesting, clearedByMargin, touchedNeckline {
                         // A pullback to the neckline is a retest whether it arrives
                         // before or after the move was confirmed.
-                        newState = .retest
+                        retesting = true
                     } else if state == .breakoutDetected, let breakout = breakoutIndex, index - breakout >= 3 {
                         let held = ((index - 2)...index).allSatisfy { other in
                             direction == .bullish
@@ -514,7 +521,7 @@ enum DoublePatternAnalyzer {
                 : candle.close < neckline * (1 - invalidationBand)
             if clearanceReached { clearedByMargin = true }
         }
-        return JourneyWalk(events: events, phase: state, breakoutIndex: breakoutIndex, retestHeld: retestHeld)
+        return JourneyWalk(events: events, phase: state, breakoutIndex: breakoutIndex, retestHeld: retestHeld, retesting: retesting)
     }
 
     // MARK: - Confidence
@@ -526,6 +533,7 @@ enum DoublePatternAnalyzer {
         phase: SignalStatus,
         breakoutIndex: Int?,
         retestHeld: Bool,
+        retesting: Bool,
         volumeRatio: Double
     ) -> [ConfidenceFactor] {
         let lastIndex = candles.count - 1
@@ -624,7 +632,7 @@ enum DoublePatternAnalyzer {
                 detail: L10n.text("Price returned to the neckline and left it in the breakout direction — the level is verified.", "Fiyat boyun çizgisine dönüp kırılım yönünde ayrıldı — seviye doğrulandı."),
                 score: retestMax, maxScore: retestMax
             )
-        } else if phase == .retest {
+        } else if retesting {
             retestFactor = ConfidenceFactor(
                 key: "retest",
                 title: L10n.text("Retest in progress", "Retest sürüyor"),

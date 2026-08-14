@@ -6,9 +6,8 @@ enum JourneyDirection: String, Sendable {
     case bullish, bearish
 }
 
-/// An on-device detector the user can switch between. Every model feeds the
-/// same Breakout Journey lifecycle, so switching one out changes how phases are
-/// detected without changing how they are presented.
+/// An on-device chart detector. Its internal phases build overlays and are not
+/// exposed as product states; Market State is the only user-facing status.
 enum JourneyModel: String, CaseIterable, Identifiable, Sendable {
     case emaCross
     case donchian20, donchian50, horizontalLevel, consolidation
@@ -64,9 +63,9 @@ enum JourneyModel: String, CaseIterable, Identifiable, Sendable {
 
     nonisolated var title: String {
         switch self {
-        case .emaCross: "EMA Cross 7/25/99"
-        case .donchian20: "Donchian 20"
-        case .donchian50: "Donchian 50"
+        case .emaCross: L10n.text("Market State", "Piyasa Durumu")
+        case .donchian20: L10n.text("Price Channel 20", "Fiyat Kanalı 20")
+        case .donchian50: L10n.text("Price Channel 50", "Fiyat Kanalı 50")
         case .horizontalLevel: L10n.text("Horizontal Level", "Yatay Seviye")
         case .consolidation: L10n.text("Consolidation", "Konsolidasyon")
         case .doubleBottom: L10n.text("Double Bottom", "Çift Dip")
@@ -78,8 +77,8 @@ enum JourneyModel: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .emaCross:
             L10n.text(
-                "Tracks the journey from EMA 7/25 crossovers with EMA 99 as the trend filter.",
-                "Kırılım sürecini EMA 7/25 kesişimlerinden izler; EMA 99 trend filtresidir."
+                "Measures the current balance between selling pressure, absorption, resilience and confirmation on closed candles.",
+                "Kapanmış mumlarda satış baskısı, absorpsiyon, dayanıklılık ve teyit arasındaki güncel dengeyi ölçer."
             )
         case .donchian20:
             L10n.text(
@@ -182,6 +181,10 @@ struct JourneyAnalysis: Sendable {
     /// The directional evidence rows that adjusted the quality score, shown as
     /// a collapsed sub-section rather than among the main factors.
     var directionalFactors: [ConfidenceFactor] = []
+    /// The tournament model's 0–100 score for the latest candle.
+    var trendScore: Int? = nil
+    /// Entry-event times of journeys that qualified as the A+ setup.
+    var aPlusEventTimes: Set<Date> = []
 
     nonisolated var direction: JourneyDirection { model.direction }
 
@@ -213,7 +216,7 @@ enum JourneyAnalyzer {
     ) -> JourneyAnalysis? {
         switch model {
         case .emaCross:
-            EMAJourneyAnalyzer.analyze(
+            TournamentJourneyAnalyzer.analyze(
                 candles: candles,
                 higherTimeframeCandles: higherTimeframeCandles,
                 higherTimeframeTitle: higherTimeframeTitle

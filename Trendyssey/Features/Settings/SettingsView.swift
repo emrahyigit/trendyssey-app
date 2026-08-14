@@ -9,10 +9,9 @@ struct SettingsView: View {
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("notificationsEnabled") private var notifications = false
     @AppStorage("preferredTimeframe") private var preferredTimeframe = "15m"
-    @AppStorage(JourneyModel.storageKey) private var journeyModel = JourneyModel.donchian20.rawValue
-    @AppStorage("notificationStatuses") private var notificationStatuses = "preBreakout,breakoutDetected,confirmed,retest,failed,expired"
+    @AppStorage(JourneyModel.storageKey) private var journeyModel = JourneyModel.emaCross.rawValue
+    @AppStorage("notificationMarketStates") private var notificationMarketStates = "neutral,selling_dominant,seller_impact_fading,buy_side_absorption,bounce_attempt,bullish_confirmation,bullish_momentum,breakdown_risk"
     @AppStorage("notificationScope") private var notificationScope = "favorites"
-    @AppStorage("notificationMinimumSignalStrength") private var notificationMinimumSignalStrength = 0
     @AppStorage("notificationMinimumSuccessRate") private var notificationMinimumSuccessRate = 0
     @AppStorage("notificationMinimumRegimeScore") private var notificationMinimumRegimeScore = 0
     @AppStorage("notificationMinimumReadinessScore") private var notificationMinimumReadinessScore = 0
@@ -22,6 +21,7 @@ struct SettingsView: View {
     /// Same minimum 24h USDT volume used by the breakout-scenario screen.
     /// Stored in millions to keep the stepper compact and understandable.
     @AppStorage("notificationMinimumVolumeMillions") private var notificationMinimumVolumeMillions = 0
+    @AppStorage("notificationMinimumStateScore") private var notificationMinimumStateScore = 0
     @AppStorage("appLanguage") private var appLanguage = AppLanguage.default.rawValue
     @AppStorage("themeMode") private var themeMode = AppThemeMode.system.rawValue
     @State private var notificationAuthorized = false
@@ -107,6 +107,12 @@ struct SettingsView: View {
                 } label: {
                     proAnalysisLabel(L10n.text("Breakout scenario", "Kırılım senaryosu"))
                 }
+                NavigationLink {
+                    if environment.subscriptionStore.isSubscribed { LiveTradesView() }
+                    else { SubscriptionView() }
+                } label: {
+                    proAnalysisLabel(L10n.text("Auto trader", "Otomatik işlemler"))
+                }
             }
             Section(L10n.text("NOTIFICATIONS", "BİLDİRİMLER")) {
                 if !environment.subscriptionStore.isSubscribed {
@@ -129,31 +135,39 @@ struct SettingsView: View {
                 }
                 .pickerStyle(.segmented)
                 .disabled(!environment.subscriptionStore.isSubscribed)
-                notificationScoreStepper(
-                    L10n.text("Min. signal strength", "Min. sinyal gücü"),
-                    value: $notificationMinimumSignalStrength
-                )
-                notificationScoreStepper(
-                    L10n.text("Min. success rate", "Min. başarı oranı"),
-                    value: $notificationMinimumSuccessRate
-                )
-                .disabled(!environment.subscriptionStore.isSubscribed)
-                Stepper(
-                    L10n.text(
-                        "Min. 24h volume: \(notificationMinimumVolumeText)",
-                        "Min. 24s hacim: \(notificationMinimumVolumeText)"
-                    ),
-                    value: $notificationMinimumVolumeMillions,
-                    in: 0...100,
-                    step: 5
-                )
+                DisclosureGroup {
+                    Stepper(
+                        L10n.text(
+                            "Min. 24h volume: \(notificationMinimumVolumeText)",
+                            "Min. 24s hacim: \(notificationMinimumVolumeText)"
+                        ),
+                        value: $notificationMinimumVolumeMillions,
+                        in: 0...100,
+                        step: 5
+                    )
+                    Stepper(
+                        L10n.text(
+                            "Min. state score: \(minimumStateScoreText)",
+                            "Min. durum puanı: \(minimumStateScoreText)"
+                        ),
+                        value: $notificationMinimumStateScore,
+                        in: 0...100,
+                        step: 5
+                    )
+                } label: {
+                    LabeledContent(L10n.text("Alert thresholds", "Bildirim eşikleri"), value: thresholdsSummary)
+                }
                 .disabled(!environment.subscriptionStore.isSubscribed)
                 DisclosureGroup {
-                    ForEach(notificationEligibleStatuses, id: \.self) { status in
-                        Toggle(status.title(alertModel.direction), isOn: statusBinding(for: status))
+                    ForEach(MarketStateKind.allCases, id: \.self) { state in
+                        Toggle(isOn: marketStateBinding(for: state)) {
+                            Label(state.title, systemImage: state.systemImage)
+                                .font(.subheadline)
+                                .foregroundStyle(state.color)
+                        }
                     }
                 } label: {
-                    LabeledContent(L10n.text("Signal stages", "Sinyal aşamaları"), value: L10n.text("\(selectedStatuses.count) selected", "\(selectedStatuses.count) seçili"))
+                    LabeledContent(L10n.text("Market states", "Piyasa durumları"), value: L10n.text("\(selectedMarketStates.count) selected", "\(selectedMarketStates.count) seçili"))
                 }
                 .disabled(!environment.subscriptionStore.isSubscribed)
             }
@@ -229,21 +243,6 @@ struct SettingsView: View {
             .onChange(of: preferenceFingerprint) { _, _ in syncPreferences() }
     }
 
-    /// The single model choice in the app: it drives on-device journeys and
-    /// scores, and — through `serverSlug` — which backend model the alerts and the
-    /// recorded signal history come from.
-    private var selectedJourneyModel: JourneyModel {
-        JourneyModel(rawValue: journeyModel) ?? .donchian20
-    }
-
-    /// The model alerts actually come from. Alerts are raised by the backend, so a
-    /// device-only model falls back to the one the backend does run.
-    private var alertModel: JourneyModel {
-        selectedJourneyModel.deliversAlerts
-            ? selectedJourneyModel
-            : JourneyModel.selectableCases.first(where: \.deliversAlerts) ?? .donchian20
-    }
-
     private func proAnalysisLabel(_ title: String) -> some View {
         HStack {
             Text(title)
@@ -300,32 +299,33 @@ struct SettingsView: View {
         if notifications && !authorized { notifications = false }
     }
 
-    private var selectedStatuses: Set<SignalStatus> {
-        Set(notificationStatuses.split(separator: ",").compactMap { value in
-            notificationEligibleStatuses.first { $0.rawValue == value }
+    private var selectedMarketStates: Set<MarketStateKind> {
+        Set(notificationMarketStates.split(separator: ",").compactMap { value in
+            MarketStateKind(rawValue: String(value))
         })
     }
 
-    private var notificationEligibleStatuses: [SignalStatus] {
-        SignalStatus.userSelectableCases
-    }
-
-    private func statusBinding(for status: SignalStatus) -> Binding<Bool> {
+    private func marketStateBinding(for state: MarketStateKind) -> Binding<Bool> {
         Binding(
-            get: { selectedStatuses.contains(status) },
+            get: { selectedMarketStates.contains(state) },
             set: { isSelected in
-                var statuses = selectedStatuses
-                if isSelected { statuses.insert(status) } else { statuses.remove(status) }
-                notificationStatuses = notificationEligibleStatuses
-                    .filter(statuses.contains)
+                var states = selectedMarketStates
+                if isSelected { states.insert(state) } else { states.remove(state) }
+                notificationMarketStates = MarketStateKind.allCases
+                    .filter(states.contains)
                     .map(\.rawValue)
                     .joined(separator: ",")
             }
         )
     }
 
-    private func notificationScoreStepper(_ title: String, value: Binding<Int>) -> some View {
-        Stepper("\(title): \(value.wrappedValue)", value: value, in: 0...90, step: 10)
+    /// One-line summary on the collapsed alert-threshold control.
+    private var thresholdsSummary: String {
+        let parts = [
+            notificationMinimumVolumeMillions > 0 ? "$\(notificationMinimumVolumeMillions)M" : nil,
+            notificationMinimumStateScore > 0 ? "\(notificationMinimumStateScore)+" : nil,
+        ].compactMap { $0 }
+        return parts.isEmpty ? L10n.text("Off", "Kapalı") : parts.joined(separator: " · ")
     }
 
     private var notificationMinimumVolumeText: String {
@@ -334,8 +334,14 @@ struct SettingsView: View {
             : "$\(notificationMinimumVolumeMillions)M"
     }
 
+    private var minimumStateScoreText: String {
+        notificationMinimumStateScore <= 0
+            ? L10n.text("Off", "Kapalı")
+            : "\(notificationMinimumStateScore) / 100"
+    }
+
     private var preferenceFingerprint: String {
-        "\(notifications)|\(preferredTimeframe)|\(journeyModel)|\(notificationStatuses)|\(notificationScope)|\(notificationMinimumRegimeScore)|\(notificationMinimumReadinessScore)|\(notificationMinimumBreakoutQualityScore)|\(notificationMinimumConfirmationScore)|\(notificationMinimumVolumeMillions)|\(appLanguage)"
+        "\(notifications)|\(preferredTimeframe)|\(journeyModel)|\(notificationMarketStates)|\(notificationScope)|\(notificationMinimumRegimeScore)|\(notificationMinimumReadinessScore)|\(notificationMinimumBreakoutQualityScore)|\(notificationMinimumConfirmationScore)|\(notificationMinimumVolumeMillions)|\(notificationMinimumStateScore)|\(appLanguage)"
     }
 
     private func syncPreferences() {

@@ -46,36 +46,37 @@ export interface BTCStrengthObservation {
  * The standalone relative-strength layer, independent from the small
  * btcStrength confidence ingredient above. Two stages:
  *
- *   1. Here: the raw SCALAR — the coin's excess log return vs BTC over ~24h
- *      of candles. Signed, unbounded, and exactly 0 for a coin that moved
- *      one-to-one with BTC (BTC itself is written as 0 by the scanner).
- *      "BTC fell 1% while the coin rose 2%" scores +3% here.
+ *   1. Here: the raw SCALAR — the cumulative sum of per-candle (coin − BTC)
+ *      log-return differences over the window. Signed, and exactly 0 for a
+ *      coin that moved one-to-one with BTC (BTC itself is written as 0 by
+ *      the scanner).
  *   2. In the database (refresh_relative_strength): once every coin's scalar
  *      is stored, it is ranked into a 0-100 percentile across the scanned
  *      universe. That percentile is what users see.
  *
- * Validated on 30 days of 15m breakouts (Aug 2026, 864 entries): entries with
- * a positive 24h excess return hit +2%-before--2% at 51-53% vs 43-46% for
- * negative ones; the split held on the +5%/-3% rule (40% vs 29-36%). Only the
- * 15m window is validated; the others use proportional windows.
+ * Product decision (Aug 2026, tournament alignment): the window is the trend
+ * score's momentum window — 20 candles, unclamped — so the percentile the
+ * user sees and the momentum component inside the trend score are the same
+ * measurement on the same span. The earlier 16-candle ±2%-winsorized variant
+ * ranked slightly differently and the two gauges could disagree; the
+ * tournament validated the plain 20-candle read (it filtered entries into
+ * higher expectancy on every timeframe).
  */
-// Product decision (Aug 2026): a uniform 16-candle window on every
-// timeframe — 4h of context on 15m candles. Reacts to fresh strength much
-// faster than the earlier ~24h window.
 export const RELATIVE_STRENGTH_WINDOWS: Record<string, number> = {
-  "15m": 16,
-  "1h": 16,
-  "4h": 16,
-  "1d": 16,
+  "15m": 20,
+  "1h": 20,
+  "4h": 20,
+  "1d": 20,
 };
 
 export interface RelativeStrengthObservation {
   coinReturn: number;
   btcReturn: number;
+  /** Cumulative excess log return: per-candle (coin − BTC) differences
+   * summed over the window — the tournament's momentum read. */
   excessReturn: number;
-  /** Share of DECISIVE candles the coin's return beat BTC's by more than the
-   * dead zone. Differences under ±1% are treated as dead candles — they count
-   * for neither side. Neutral 0.5 when no candle was decisive. */
+  /** Share of candles the coin's return beat BTC's, however small the edge.
+   * Exact ties count for neither side. Neutral 0.5 when every candle tied. */
   winRate: number;
   windowCandles: number;
   samples: number;
@@ -100,21 +101,22 @@ export function relativeStrengthObservation(
   if (first.coin.close <= 0 || first.btc.close <= 0) return null;
   const coinReturn = Math.log(last.coin.close / first.coin.close);
   const btcReturn = Math.log(last.btc.close / first.btc.close);
-  const DEAD_ZONE = 0.01; // ±1% per candle: anything smaller is a dead candle
+  let excess = 0;
   let wins = 0;
   let decisive = 0;
   for (let i = 1; i < aligned.length; i += 1) {
     const coinStep = Math.log(aligned[i].coin.close / aligned[i - 1].coin.close);
     const btcStep = Math.log(aligned[i].btc.close / aligned[i - 1].btc.close);
     const difference = coinStep - btcStep;
-    if (Math.abs(difference) < DEAD_ZONE) continue;
+    excess += difference;
+    if (difference === 0) continue;
     decisive += 1;
     if (difference > 0) wins += 1;
   }
   return {
     coinReturn,
     btcReturn,
-    excessReturn: coinReturn - btcReturn,
+    excessReturn: excess,
     winRate: decisive > 0 ? wins / decisive : 0.5,
     windowCandles,
     samples: aligned.length,

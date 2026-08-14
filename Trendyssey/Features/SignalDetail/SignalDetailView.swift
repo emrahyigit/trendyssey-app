@@ -9,11 +9,11 @@ struct SignalDetailView: View {
     @State private var analysis: JourneyAnalysis?
     @State private var chartOverlay = JourneyChartOverlay.empty
     @State private var chartError = false
-    @State private var journeyStats: SymbolJourneyStats?
+    @State private var refreshedMarketState: MarketStateSnapshot?
     /// (holds, fails) among predictors with a proven record on this journey.
     @State private var topPredictorConsensus: (holds: Int, fails: Int)?
     @AppStorage("preferredTimeframe") private var preferredTimeframe = "15m"
-    @AppStorage(JourneyModel.storageKey) private var journeyModel = JourneyModel.donchian20.rawValue
+    @AppStorage(JourneyModel.storageKey) private var journeyModel = JourneyModel.emaCross.rawValue
 
     private static let overlayColors: [String: Color] = [
         "ema7": TrendysseyColor.binanceYellow,
@@ -36,8 +36,7 @@ struct SignalDetailView: View {
         return model
     }
     private var selectedTimeframe: AnalysisTimeframe { AnalysisTimeframe(rawValue: preferredTimeframe) ?? .m15 }
-    private var currentPhase: SignalStatus { analysis?.currentPhase ?? signal.status }
-    private var direction: JourneyDirection { analysis?.direction ?? selectedModel.direction }
+    private var currentMarketState: MarketStateSnapshot? { refreshedMarketState ?? signal.marketState }
 
     /// Analysis exists only where the server computed it: coins with a signal
     /// row. The app never derives one of its own.
@@ -56,9 +55,9 @@ struct SignalDetailView: View {
                             .lineLimit(1)
                             .minimumScaleFactor(0.6)
                         if liveAnalysisAllowed {
-                            Text(currentPhase.title(direction))
+                            Text(currentMarketState?.state.title ?? L10n.text("State updating", "Durum güncelleniyor"))
                                 .font(.subheadline)
-                                .foregroundStyle(currentPhase == .watching ? TrendysseyColor.secondaryText : TrendysseyColor.positive)
+                                .foregroundStyle(currentMarketState?.state.color ?? TrendysseyColor.secondaryText)
                                 .lineLimit(1)
                                 .minimumScaleFactor(0.65)
                         } else {
@@ -71,33 +70,27 @@ struct SignalDetailView: View {
                     favorite
                 }
                 SurfaceCard { candleChart }
-                SurfaceCard {
-                    VStack(alignment: .leading, spacing: 14) {
-                        confidenceCard
-                        if let journeyStats, journeyStats.startedCount > 0 {
-                            Divider()
-                            breakoutHistoryCard(journeyStats)
+                if let state = currentMarketState {
+                    SurfaceCard { CurrentMarketStateCard(snapshot: state) }
+                }
+                if let consensus = topPredictorConsensus {
+                    SurfaceCard {
+                        HStack(spacing: 8) {
+                            Image(systemName: "person.2.badge.gearshape")
+                                .font(.caption).foregroundStyle(TrendysseyColor.accent)
+                            Text(L10n.text(
+                                "Top predictors on this observation: \(consensus.holds) positive · \(consensus.fails) negative",
+                                "Bu gözlemde en iyi tahminciler: \(consensus.holds) olumlu · \(consensus.fails) olumsuz"
+                            ))
+                            .font(.caption.weight(.semibold))
                         }
-                        if let consensus = topPredictorConsensus {
-                            Divider()
-                            HStack(spacing: 8) {
-                                Image(systemName: "person.2.badge.gearshape")
-                                    .font(.caption).foregroundStyle(TrendysseyColor.accent)
-                                Text(L10n.text(
-                                    "Top predictors on this breakout: \(consensus.holds) holds · \(consensus.fails) fails",
-                                    "Bu kırılımda en iyi tahminciler: \(consensus.holds) tutar · \(consensus.fails) geçersiz"
-                                ))
-                                .font(.caption.weight(.semibold))
-                            }
-                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
-                if liveAnalysisAllowed {
-                    SurfaceCard { journeyCard }
-                } else {
+                if !liveAnalysisAllowed {
                     SurfaceCard { proTeaser }
                 }
-                SurfaceCard { CoinChatPreview(symbol: signal.symbol, journeyID: signal.journeyID, journeyPhase: currentPhase) }
+                SurfaceCard { CoinChatPreview(symbol: signal.symbol, journeyID: signal.journeyID) }
             }.padding(18)
         }.background(TrendysseyColor.canvas.ignoresSafeArea()).navigationBarTitleDisplayMode(.inline)
             .task(id: "\(signal.symbol)-\(preferredTimeframe)-\(journeyModel)") {
@@ -105,9 +98,10 @@ struct SignalDetailView: View {
                 let requestedTimeframe = selectedTimeframe
                 analysis = nil
                 chartOverlay = .empty
-                journeyStats = nil
                 topPredictorConsensus = nil
-                Task { await loadJourneyStats(timeframe: requestedTimeframe) }
+                if let states = try? await MarketStateService.shared.snapshots(timeframe: requestedTimeframe.rawValue) {
+                    refreshedMarketState = states[signal.symbol]
+                }
                 Task { await loadTopPredictorConsensus() }
                 while !Task.isCancelled {
                     await loadCandles(model: requestedModel, timeframe: requestedTimeframe)
@@ -374,141 +368,6 @@ struct SignalDetailView: View {
         } catch { if candles.isEmpty { chartError = true } }
     }
 
-    // MARK: - Journey (last 24 hours)
-
-    @ViewBuilder private var journeyCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Label(currentPhase.phaseTitle(direction), systemImage: "point.topleft.down.to.point.bottomright.curvepath")
-                    .font(.headline)
-                Spacer()
-                Text(L10n.text("LAST 24H", "SON 24 SAAT"))
-                    .font(.caption2.bold()).foregroundStyle(TrendysseyColor.secondaryText)
-            }
-            if let analysis {
-                SignalJourneyProgress(status: analysis.currentPhase, direction: analysis.direction, compact: true)
-                // The story starts at the latest breakout; earlier phases of
-                // the same day belong to journeys that already ended.
-                let recentEvents = analysis.events(lastHours: 24)
-                let events = recentEvents.lastIndex(where: { $0.status == .breakoutDetected })
-                    .map { Array(recentEvents[$0...]) } ?? recentEvents
-                if events.isEmpty {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(L10n.text("No phase transition in the last 24 hours.", "Son 24 saatte aşama geçişi olmadı."))
-                            .font(.caption.weight(.semibold))
-                        Text(analysis.currentPhase.journeyGuidance(analysis.direction))
-                            .font(.caption).foregroundStyle(TrendysseyColor.secondaryText).lineSpacing(3)
-                    }
-                } else {
-                    ForEach(Array(events.enumerated()), id: \.element.id) { index, event in
-                        HStack(alignment: .top, spacing: 11) {
-                            VStack(spacing: 3) {
-                                Circle().fill(journeyColor(event.status)).frame(width: 10, height: 10)
-                                if index < events.count - 1 {
-                                    Rectangle().fill(TrendysseyColor.secondaryText.opacity(0.25)).frame(width: 1, height: 28)
-                                }
-                            }.padding(.top, 4)
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(event.status.title(analysis.direction)).font(.subheadline.bold()).foregroundStyle(journeyColor(event.status))
-                                Text(L10n.dateTime(event.time))
-                                    .font(.caption2).foregroundStyle(TrendysseyColor.secondaryText)
-                            }
-                            Spacer()
-                            Text("$\(event.price.formatted(.number.precision(.fractionLength(2...6)).locale(L10n.locale)))")
-                                .font(.caption.bold()).monospacedDigit()
-                        }
-                    }
-                }
-                Text(L10n.text(
-                    "\(analysis.model.title) on closed \(AnalysisTimeframe.selected.title) candles. \(analysis.model.summary)",
-                    "Kapanmış \(AnalysisTimeframe.selected.title) mumlarında \(analysis.model.title). \(analysis.model.summary)"
-                ))
-                .font(.caption2).foregroundStyle(TrendysseyColor.secondaryText).lineSpacing(2)
-            } else if chartError {
-                Label(L10n.text("Journey analysis is temporarily unavailable.", "Süreç analizi geçici olarak kullanılamıyor."), systemImage: "exclamationmark.triangle")
-                    .font(.caption).foregroundStyle(TrendysseyColor.warning)
-            } else if candles.isEmpty {
-                ProgressView().frame(maxWidth: .infinity).padding(.vertical, 16)
-            } else {
-                // Candles loaded but the server has no signal row yet — say so
-                // instead of spinning forever.
-                Label(L10n.text(
-                    "No recorded journey for this coin yet; it fills in with the next scan.",
-                    "Bu coin için henüz kayıtlı bir süreç yok; bir sonraki taramayla dolacak."
-                ), systemImage: "clock")
-                .font(.caption).foregroundStyle(TrendysseyColor.secondaryText)
-            }
-        }
-    }
-
-    private func journeyColor(_ status: SignalStatus) -> Color {
-        switch status {
-        case .confirmed, .retest: TrendysseyColor.positive
-        case .breakoutDetected, .preBreakout: TrendysseyColor.accent
-        case .failed, .expired: TrendysseyColor.negative
-        case .watching: TrendysseyColor.secondaryText
-        }
-    }
-
-    // MARK: - Breakout track record
-
-    private func breakoutHistoryCard(_ stats: SymbolJourneyStats) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Label(L10n.text("Breakout Track Record", "Kırılım Karnesi"), systemImage: "checklist")
-                .font(.headline)
-            HStack(spacing: 10) {
-                trackRecordTile(
-                    value: "\(stats.startedCount)",
-                    title: L10n.text("Breakouts", "Kırılım"),
-                    tint: TrendysseyColor.accent
-                )
-                trackRecordTile(
-                    value: "\(stats.invalidatedCount)",
-                    title: L10n.text("Invalidated", "Geçersiz"),
-                    tint: TrendysseyColor.negative
-                )
-                trackRecordTile(
-                    value: stats.successRatePercent.map {
-                        "\($0.formatted(.number.precision(.fractionLength(0)).locale(L10n.locale)))%"
-                    } ?? "—",
-                    title: L10n.text("Success rate", "Başarı oranı"),
-                    tint: TrendysseyColor.positive
-                )
-            }
-            if stats.isHighInvalidation {
-                Label(L10n.text(
-                    "More than three quarters of this coin's recent breakouts were invalidated — a sign of fake-outs. It is left out of Featured Breakouts and Waiting for Breakout until its record improves.",
-                    "Bu coinin son kırılımlarının dörtte üçünden fazlası geçersiz kaldı — sahte kırılım işareti. Karnesi düzelene kadar Öne Çıkan Kırılımlar ve Kırılım Beklenenler listelerine alınmıyor."
-                ), systemImage: "exclamationmark.triangle.fill")
-                .font(.caption)
-                .foregroundStyle(TrendysseyColor.negative)
-                .lineSpacing(2)
-            }
-            Text(L10n.text(
-                "The coin's breakouts over the last 30 days on this timeframe. Success rate is the share not invalidated.",
-                "Coinin bu zaman diliminde son 30 gündeki kırılımları. Başarı oranı, geçersiz kalmayanların payıdır."
-            ))
-            .font(.caption2).foregroundStyle(TrendysseyColor.secondaryText).lineSpacing(2)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func trackRecordTile(value: String, title: String, tint: Color) -> some View {
-        VStack(spacing: 3) {
-            Text(value)
-                .font(.title3.bold()).monospacedDigit()
-                .foregroundStyle(tint)
-            Text(title)
-                .font(.caption2)
-                .foregroundStyle(TrendysseyColor.secondaryText)
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 10)
-        .background(tint.opacity(0.1), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-    }
-
     /// Counts only predictions from users with a proven record (5+ resolved,
     /// 60%+ accuracy), so the line reflects informed opinion, not raw votes.
     @MainActor private func loadTopPredictorConsensus() async {
@@ -525,53 +384,6 @@ struct SignalDetailView: View {
             holds: qualified.filter(\.holds).count,
             fails: qualified.filter { !$0.holds }.count
         )
-    }
-
-    @MainActor private func loadJourneyStats(timeframe: AnalysisTimeframe) async {
-        let stats = try? await JourneyStatsService.shared.stats(
-            symbol: signal.symbol,
-            modelSlug: AnalysisModelSelection.selectedSlug,
-            timeframe: timeframe.rawValue
-        )
-        guard timeframe == selectedTimeframe else { return }
-        journeyStats = stats
-    }
-
-    // MARK: - Signal strength
-
-    private var confidenceCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Label(L10n.text("Signal Strength", "Sinyal Gücü"), systemImage: "gauge.with.needle")
-                .font(.headline)
-            HStack(alignment: .firstTextBaseline) {
-                Text(signal.relativeStrengthScore.map { "\($0)" } ?? "—")
-                    .font(.system(size: 52, weight: .bold, design: .rounded)).monospacedDigit()
-                    + Text(" / 100").font(.subheadline).foregroundColor(TrendysseyColor.secondaryText)
-                Spacer()
-                if let strength = signal.relativeStrengthScore {
-                    Text(confidenceLevelTitle(strength))
-                        .font(.caption.bold())
-                        .foregroundStyle(confidenceColor(strength))
-                        .padding(.horizontal, 10).padding(.vertical, 6)
-                        .background(confidenceColor(strength).opacity(0.12), in: Capsule())
-                }
-            }
-            GeometryReader { proxy in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(TrendysseyColor.border)
-                    Capsule()
-                        .fill(confidenceColor(signal.relativeStrengthScore ?? 0))
-                        .frame(width: max(6, proxy.size.width * CGFloat(signal.relativeStrengthScore ?? 0) / 100))
-                }
-            }
-            .frame(height: 6)
-            Text(L10n.text(
-                "The coin's recent performance against BTC, ranked across all scanned coins. Statistical data, not investment advice.",
-                "Coinin yakın dönem BTC karşısındaki performansının taranan coinler içindeki sıralaması. İstatistiksel veridir; yatırım tavsiyesi değildir."
-            ))
-            .font(.caption2).foregroundStyle(TrendysseyColor.secondaryText).lineSpacing(2)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func factorRow(_ factor: ConfidenceFactor) -> some View {
@@ -608,21 +420,4 @@ struct SignalDetailView: View {
         }
     }
 
-    private func confidenceLevelTitle(_ score: Int) -> String {
-        switch score {
-        case 75...: L10n.text("Strong", "Güçlü")
-        case 50..<75: L10n.text("Moderate", "Orta")
-        case 30..<50: L10n.text("Weak", "Zayıf")
-        default: L10n.text("Very weak", "Çok zayıf")
-        }
-    }
-
-    private func confidenceColor(_ score: Int) -> Color {
-        switch score {
-        case 75...: TrendysseyColor.positive
-        case 50..<75: TrendysseyColor.accent
-        case 30..<50: TrendysseyColor.warning
-        default: TrendysseyColor.negative
-        }
-    }
 }

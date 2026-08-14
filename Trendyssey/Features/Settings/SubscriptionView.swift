@@ -20,7 +20,7 @@ struct SubscriptionView: View {
                     VStack(alignment: .leading, spacing: 16) {
                         benefit("square.stack.3d.up.fill", L10n.text("Six specialized breakout models", "Altı özel kırılım modeli"))
                         benefit("clock.arrow.circlepath", L10n.text("Four closed-candle timeframes", "Dört kapanmış mum zaman dilimi"))
-                        benefit("slider.horizontal.3", L10n.text("Score, volume and signal-stage filters", "Puan, hacim ve sinyal aşaması filtreleri"))
+                        benefit("slider.horizontal.3", L10n.text("Market-state, volume and signal-stage filters", "Piyasa durumu, hacim ve sinyal aşaması filtreleri"))
                         benefit("bell.badge.fill", L10n.text("Real-time background push alerts", "Gerçek zamanlı arka plan bildirimleri"))
                         benefit("chart.xyaxis.line", L10n.text("Breakout scenario simulator", "Kırılım senaryosu simülatörü"))
                     }

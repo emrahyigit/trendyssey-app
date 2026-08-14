@@ -46,7 +46,7 @@ struct NotificationCenterView: View {
             ContentUnavailableView {
                 Label(L10n.text("No notifications yet", "Henüz bildirim yok"), systemImage: "bell.slash")
             } description: {
-                Text(L10n.text("Breakouts matching your filters will appear here.", "Filtrelerine uyan bir kırılım oluştuğunda burada göreceksin."))
+                Text(L10n.text("Market State transitions matching your filters will appear here.", "Filtrelerine uyan Piyasa Durumu geçişleri burada görünür."))
             }
         } else {
             ScrollView {
@@ -94,11 +94,7 @@ private struct NotificationRow: View {
                     Text(item.createdAt, format: .relative(presentation: .named))
                         .font(.caption2).foregroundStyle(TrendysseyColor.secondaryText).lineLimit(1)
                 }
-                // Signal alerts render the same four score layers as the profile
-                // filters. Notifications without a signal keep the server body.
-                if item.signal == nil {
-                    Text(displayBody).font(.caption).foregroundStyle(TrendysseyColor.secondaryText).lineSpacing(3)
-                }
+                Text(displayBody).font(.caption).foregroundStyle(TrendysseyColor.secondaryText).lineSpacing(3)
                 if let signal = item.signal {
                     signalMetrics(signal)
                     Label(L10n.text("View details", "Detayı görüntüle"), systemImage: "arrow.up.right")
@@ -112,32 +108,30 @@ private struct NotificationRow: View {
     }
 
     private func signalMetrics(_ signal: MarketSignal) -> some View {
-        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 6) {
+        HStack(spacing: 6) {
             metric(
-                L10n.text("Regime", "Rejim"), value: signal.regimeScore,
-                icon: "waveform.path.ecg", tint: strengthColor(signal.regimeScore)
+                nil,
+                value: notificationStateText(signal),
+                icon: signal.marketState?.state.systemImage ?? "waveform.path.ecg",
+                tint: signal.marketState?.state.color ?? TrendysseyColor.secondaryText
             )
             metric(
-                L10n.text("Readiness", "Hazırlık"), value: signal.readinessScore,
-                icon: "scope", tint: strengthColor(signal.readinessScore)
-            )
-            metric(
-                L10n.text("Quality", "Kalite"), value: signal.breakoutQualityScore,
-                icon: "gauge.with.needle", tint: strengthColor(signal.breakoutQualityScore)
-            )
-            metric(
-                L10n.text("Confirmation", "Teyit"), value: signal.confirmationScore,
-                icon: "checkmark.seal", tint: strengthColor(signal.confirmationScore)
+                L10n.text("24h Vol", "24s Hacim"),
+                value: "$\(signal.quoteVolume24h.formatted(.number.notation(.compactName).precision(.significantDigits(3)).locale(L10n.locale)))",
+                icon: "chart.bar.fill",
+                tint: TrendysseyColor.accent
             )
         }
     }
 
-    private func metric(_ title: String, value: Int, icon: String, tint: Color) -> some View {
+    private func metric(_ title: String?, value: String, icon: String, tint: Color) -> some View {
         HStack(spacing: 5) {
             Image(systemName: icon)
-            Text(title).lineLimit(1).minimumScaleFactor(0.75)
-            Spacer(minLength: 2)
-            Text("\(value)").monospacedDigit()
+            if let title {
+                Text(title).lineLimit(1).minimumScaleFactor(0.75)
+                Spacer(minLength: 2)
+            }
+            Text(value).monospacedDigit()
         }
         .font(.caption2.weight(.semibold))
         .foregroundStyle(tint)
@@ -145,25 +139,19 @@ private struct NotificationRow: View {
         .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
     }
 
-    private func strengthColor(_ score: Int) -> Color {
-        switch score {
-        case 75...: TrendysseyColor.positive
-        case 50..<75: TrendysseyColor.accent
-        case 30..<50: TrendysseyColor.warning
-        default: TrendysseyColor.negative
+    private func notificationStateText(_ signal: MarketSignal) -> String {
+        guard let state = signal.marketState else {
+            return L10n.text("State updating", "Durum güncelleniyor")
         }
+        guard state.hasActiveState else { return L10n.text("No active state", "Aktif durum yok") }
+        let change = state.stateScoreChange.flatMap { value in
+            value == 0 ? nil : " · \(value > 0 ? "+" : "")\(value)"
+        } ?? ""
+        return "\(state.state.title) · \(state.stateScore)/100\(change)"
     }
 
     private var icon: String {
-        guard let status = item.signalStatus else { return "bell.fill" }
-        switch status {
-        case .preBreakout: return "scope"
-        case .breakoutDetected: return "bolt.fill"
-        case .confirmed: return "checkmark.seal.fill"
-        case .retest: return "arrow.triangle.2.circlepath"
-        case .failed: return "exclamationmark.triangle.fill"
-        case .watching, .expired: return "bell.fill"
-        }
+        item.signal?.marketState?.state.systemImage ?? "waveform.path.ecg"
     }
 
     private var displayTitle: String {

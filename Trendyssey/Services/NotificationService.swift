@@ -2,58 +2,44 @@ import Foundation
 
 actor NotificationService {
     private struct Row: Decodable {
-        struct Signal: Decodable {
-            struct Symbol: Decodable {
-                let symbol: String
-                let base_asset: String
-                let icon_url: String?
-                let current_price: Double?
-                let price_change_percent_24h: Double?
-                let quote_volume_24h: Double?
-            }
-
-            let id: UUID
-            let journey_id: UUID?
-            let status: String
-            let signal_price: Double
-            let signal_time: String
-            let breakout_confidence_score: Int
-            let regime_score: Int?
-            let readiness_score: Int?
-            let breakout_quality_score: Int?
-            let confirmation_score: Int?
-            let breakout_triggered: Bool?
-            let false_breakout_risk: Int
-            let market_activity_score: Int
-            let volume_ratio: Double?
-            let estimated_volume_delta: Double?
-            let taker_buy_ratio: Double?
-            let explanation: String
-            let explanation_facts: SignalEvidence?
-            let symbols: Symbol
+        struct Symbol: Decodable {
+            let symbol: String
+            let base_asset: String
+            let icon_url: String?
+            let current_price: Double?
+            let price_change_percent_24h: Double?
+            let quote_volume_24h: Double?
         }
 
         let id: UUID
         let title: String
         let body: String
         let status: AppNotificationStatus
-        let signal_status: String?
         let created_at: String
-        let breakout_signals: Signal?
+        let market_state: MarketStateKind?
+        let market_state_score: Int?
+        let market_state_change: Int?
+        let symbols: Symbol?
     }
 
     func notifications() async throws -> [AppNotification] {
-        var components = URLComponents(url: SupabaseConfig.projectURL.appending(path: "rest/v1/notifications"), resolvingAgainstBaseURL: false)!
+        var components = URLComponents(
+            url: SupabaseConfig.projectURL.appending(path: "rest/v1/notifications"),
+            resolvingAgainstBaseURL: false
+        )!
         components.queryItems = [
-            .init(name: "select", value: "id,title,body,status,signal_status,created_at,breakout_signals(id,journey_id,status,signal_price,signal_time,breakout_confidence_score,regime_score,readiness_score,breakout_quality_score,confirmation_score,breakout_triggered,false_breakout_risk,market_activity_score,volume_ratio,estimated_volume_delta,taker_buy_ratio,explanation,explanation_facts,symbols(symbol,base_asset,icon_url,current_price,price_change_percent_24h,quote_volume_24h))"),
-            .init(name: "notification_type", value: "eq.breakout_signal"),
+            .init(name: "select", value: "id,title,body,status,created_at,market_state,market_state_score,market_state_change,symbols(symbol,base_asset,icon_url,current_price,price_change_percent_24h,quote_volume_24h)"),
+            .init(name: "notification_type", value: "eq.market_state"),
             .init(name: "order", value: "created_at.desc"),
             .init(name: "limit", value: "100"),
         ]
         let request = try await authenticatedRequest(url: components.url!)
         let (data, response) = try await URLSession.shared.data(for: request)
         try validate(response)
-        return try JSONDecoder().decode([Row].self, from: data).compactMap(map)
+        let rows = try JSONDecoder().decode([Row].self, from: data)
+        let timeframe = UserDefaults.standard.string(forKey: "preferredTimeframe") ?? "15m"
+        let marketStates = (try? await MarketStateService.shared.snapshots(timeframe: timeframe)) ?? [:]
+        return rows.compactMap { map($0, marketStates: marketStates) }
     }
 
     func mark(_ id: UUID, as status: AppNotificationStatus) async throws {
@@ -74,7 +60,7 @@ actor NotificationService {
         var components = URLComponents(url: SupabaseConfig.projectURL.appending(path: "rest/v1/notifications"), resolvingAgainstBaseURL: false)!
         components.queryItems = [
             .init(name: "status", value: "eq.unread"),
-            .init(name: "notification_type", value: "eq.breakout_signal"),
+            .init(name: "notification_type", value: "eq.market_state"),
         ]
         var request = try await authenticatedRequest(url: components.url!)
         request.httpMethod = "PATCH"
@@ -103,11 +89,29 @@ actor NotificationService {
         }
     }
 
-    private func map(_ row: Row) -> AppNotification? {
+    private func map(_ row: Row, marketStates: [String: MarketStateSnapshot]) -> AppNotification? {
         guard let createdAt = Self.date(row.created_at) else { return nil }
-        if let signal = row.breakout_signals,
-           !CryptoAssetUniverse.includes(baseAsset: signal.symbols.base_asset) {
-            return nil
+        let signal = row.symbols.flatMap { symbol -> MarketSignal? in
+            guard CryptoAssetUniverse.includes(baseAsset: symbol.base_asset) else { return nil }
+            let state = marketStates[symbol.symbol]
+            return MarketSignal(
+                id: row.id,
+                symbol: symbol.symbol,
+                name: symbol.base_asset,
+                iconURL: symbol.icon_url,
+                price: symbol.current_price ?? 0,
+                change24h: symbol.price_change_percent_24h ?? 0,
+                quoteVolume24h: symbol.quote_volume_24h ?? 0,
+                confidence: row.market_state_score ?? state?.stateScore ?? 0,
+                falseBreakoutRisk: 0,
+                activityScore: 0,
+                volumeRatio: 0,
+                takerBuyRatio: 0.5,
+                estimatedDelta: 0,
+                signalDate: createdAt,
+                explanation: row.body,
+                marketState: state
+            )
         }
         return AppNotification(
             id: row.id,
@@ -115,50 +119,8 @@ actor NotificationService {
             body: row.body,
             status: row.status,
             createdAt: createdAt,
-            signalStatus: row.signal_status.map(Self.status),
-            signal: row.breakout_signals.flatMap(Self.marketSignal)
+            signal: signal
         )
-    }
-
-    private static func marketSignal(_ row: Row.Signal) -> MarketSignal? {
-        guard let signalDate = date(row.signal_time) else { return nil }
-        return MarketSignal(
-            id: row.id,
-            journeyID: row.journey_id,
-            symbol: row.symbols.symbol,
-            name: row.symbols.base_asset,
-            iconURL: row.symbols.icon_url,
-            price: row.symbols.current_price ?? row.signal_price,
-            change24h: row.symbols.price_change_percent_24h ?? 0,
-            quoteVolume24h: row.symbols.quote_volume_24h ?? 0,
-            confidence: row.breakout_quality_score ?? row.breakout_confidence_score,
-            regimeScore: row.regime_score ?? row.explanation_facts?.scoreLayers?.regimeScore ?? 0,
-            readinessScore: row.readiness_score ?? row.explanation_facts?.scoreLayers?.readinessScore ?? 0,
-            breakoutQualityScore: row.breakout_quality_score ?? row.breakout_confidence_score,
-            confirmationScore: row.confirmation_score ?? row.explanation_facts?.scoreLayers?.confirmationScore ?? 0,
-            breakoutTriggered: row.breakout_triggered ?? row.explanation_facts?.scoreLayers?.breakoutTriggered ?? false,
-            falseBreakoutRisk: row.false_breakout_risk,
-            activityScore: row.market_activity_score,
-            volumeRatio: row.volume_ratio ?? 0,
-            takerBuyRatio: row.taker_buy_ratio ?? 0.5,
-            estimatedDelta: row.estimated_volume_delta ?? 0,
-            status: status(row.status),
-            signalDate: signalDate,
-            explanation: row.explanation,
-            evidence: row.explanation_facts
-        )
-    }
-
-    private static func status(_ value: String) -> SignalStatus {
-        switch value {
-        case "pre_breakout": .preBreakout
-        case "breakout_detected": .breakoutDetected
-        case "confirmed": .confirmed
-        case "retest": .retest
-        case "failed": .failed
-        case "expired": .expired
-        default: .watching
-        }
     }
 
     private static func date(_ value: String) -> Date? {

@@ -49,7 +49,7 @@ actor ServerAnalysisService {
             switch currentStatus {
             case .watching, .preBreakout: scoreLayers.readinessScore
             case .breakoutDetected, .failed, .expired: scoreLayers.breakoutQualityScore
-            case .confirmed, .retest: scoreLayers.confirmationScore
+            case .confirmed: scoreLayers.confirmationScore
             }
         } else {
             row.breakout_confidence_score
@@ -292,7 +292,6 @@ actor ServerAnalysisService {
         case "pre_breakout": .preBreakout
         case "breakout_detected": .breakoutDetected
         case "confirmed": .confirmed
-        case "retest": .retest
         case "failed": .failed
         case "expired": .expired
         default: .watching

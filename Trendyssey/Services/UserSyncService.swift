@@ -60,9 +60,12 @@ actor UserSyncService {
         let maximumRisk: Int
         let minimumVolumeRatio: Double
         let minimumQuoteVolume24h: Double
-        let statuses: [String]
+        let minimumStateScore: Int
         let alertScope: String
         let preferredLanguage: String
+        let marketStates: [String]
+        /// Only push for journeys whose breakout candle was the A+ setup.
+        let aplusEntriesOnly: Bool
     }
 
     private struct Device: Encodable {
@@ -90,9 +93,11 @@ actor UserSyncService {
 
     func syncCurrentState(watchlist: [String]) async {
         let defaults = UserDefaults.standard
-        let statuses = (defaults.string(forKey: "notificationStatuses") ?? "preBreakout,breakoutDetected,confirmed,retest,failed,expired")
+        let marketStates = (defaults.string(forKey: "notificationMarketStates")
+            ?? MarketStateKind.allCases.map(\.rawValue).joined(separator: ","))
             .split(separator: ",")
-            .compactMap { Self.databaseStatus(String($0)) }
+            .map(String.init)
+            .filter { MarketStateKind(rawValue: $0) != nil }
         let minimumQuality = defaults.integer(forKey: "notificationMinimumScore")
         let preferences = Preferences(
             notificationsEnabled: defaults.bool(forKey: "notificationsEnabled"),
@@ -103,14 +108,18 @@ actor UserSyncService {
             minimumReadinessScore: defaults.integer(forKey: "notificationMinimumReadinessScore"),
             minimumBreakoutQualityScore: minimumQuality,
             minimumConfirmationScore: defaults.integer(forKey: "notificationMinimumConfirmationScore"),
-            minimumSignalStrength: defaults.integer(forKey: "notificationMinimumSignalStrength"),
+            // Trend Score is retained for internal validation, not as a user
+            // notification gate. Zero also clears thresholds from older builds.
+            minimumSignalStrength: 0,
             minimumSuccessRate: defaults.integer(forKey: "notificationMinimumSuccessRate"),
             maximumRisk: 100,
             minimumVolumeRatio: 0.0,
             minimumQuoteVolume24h: Double(defaults.integer(forKey: "notificationMinimumVolumeMillions")) * 1_000_000,
-            statuses: statuses,
+            minimumStateScore: defaults.integer(forKey: "notificationMinimumStateScore"),
             alertScope: defaults.string(forKey: "notificationScope") ?? "favorites",
-            preferredLanguage: defaults.string(forKey: "appLanguage") ?? AppLanguage.default.rawValue
+            preferredLanguage: defaults.string(forKey: "appLanguage") ?? AppLanguage.default.rawValue,
+            marketStates: marketStates,
+            aplusEntriesOnly: false
         )
         try? await sync(SyncBody(preferences: preferences, watchlist: watchlist.sorted(), device: nil))
     }
@@ -380,14 +389,6 @@ actor UserSyncService {
         Keychain.write(String(Date().timeIntervalSince1970 + session.expires_in), key: Key.expiration)
     }
 
-    private static func databaseStatus(_ status: String) -> String? {
-        switch status {
-        case "preBreakout": "pre_breakout"
-        case "breakoutDetected": "breakout_detected"
-        case "confirmed", "retest", "failed", "expired": status
-        default: nil
-        }
-    }
 }
 
 private enum Keychain {

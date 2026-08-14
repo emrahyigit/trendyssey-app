@@ -56,7 +56,6 @@ extension Date {
 struct BreakoutScenarioEntry: Identifiable, Sendable {
     let id: UUID
     let symbol: String
-    let status: SignalStatus
     let direction: JourneyDirection
     let regimeScore: Int
     let readinessScore: Int
@@ -67,6 +66,16 @@ struct BreakoutScenarioEntry: Identifiable, Sendable {
     /// scenario's relative-strength filter rather than being judged on a
     /// value that was never measured.
     let relativeStrengthScore: Int?
+    /// Legacy 0-100 trend score at the entry candle. Nil for events recorded
+    /// before the score shipped; no longer exposed as a product filter.
+    let trendScore: Int?
+    /// True when the entry candle was the backtested A+ setup.
+    let trendEntry: Bool
+    /// Market state frozen at the entry candle. Nil for history recorded
+    /// before the market-state engine was introduced.
+    let marketState: MarketStateKind?
+    let marketStateScore: Int?
+    let marketStateChange: Int?
     let falseBreakoutRisk: Int
     let volumeRatio: Double
     /// The coin's 24h quote volume, so the page's minimum-volume filter can
@@ -143,11 +152,110 @@ struct BreakoutScenarioEntry: Identifiable, Sendable {
         return nil
     }
 
+    /// The tournament winner's exit: a stop that trails the high watermark by
+    /// `multiplier` × ATR and only ever tightens. No target caps the winners;
+    /// the holding deadline still applies. The ATR is approximated from the
+    /// first 14 observed true ranges — the events carry no pre-entry candles,
+    /// and volatility rarely jumps regimes inside one holding window.
+    /// The stop ratchets only AFTER a candle survives its own check, so an
+    /// intrabar high can never save the same candle's low.
+    func chandelierExit(multiplier: Double, maxOpenHours: Int) -> ScenarioExit? {
+        guard entryPrice > 0, !observedCandles.isEmpty else { return nil }
+        let deadline = entryDate.addingTimeInterval(Double(maxOpenHours) * 3600)
+        var trueRanges: [Double] = []
+        var previousClose = entryPrice
+        for candle in observedCandles.prefix(14) {
+            trueRanges.append(max(
+                candle.high - candle.low,
+                abs(candle.high - previousClose),
+                abs(candle.low - previousClose)
+            ))
+            previousClose = candle.close
+        }
+        let atr = trueRanges.reduce(0, +) / Double(max(trueRanges.count, 1))
+        guard atr > 0 else { return nil }
+        let width = multiplier * atr
+        var watermark = entryPrice
+        var stop = direction == .bullish ? entryPrice - width : entryPrice + width
+        var previous: PriceCandle?
+        for candle in observedCandles {
+            if candle.openTime >= deadline {
+                let closePrice = previous?.close ?? entryPrice
+                return ScenarioExit(
+                    date: previous?.closeTime.ceiledToSecond ?? deadline,
+                    returnPercent: directionalReturnPercent(closePrice),
+                    reason: .timeLimit
+                )
+            }
+            let stopHit = direction == .bullish ? candle.low <= stop : candle.high >= stop
+            if stopHit {
+                return ScenarioExit(
+                    date: candle.closeTime.ceiledToSecond,
+                    returnPercent: directionalReturnPercent(stop),
+                    reason: .stopLoss
+                )
+            }
+            if candle.closeTime >= deadline {
+                return ScenarioExit(
+                    date: candle.closeTime.ceiledToSecond,
+                    returnPercent: directionalReturnPercent(candle.close),
+                    reason: .timeLimit
+                )
+            }
+            watermark = direction == .bullish ? max(watermark, candle.high) : min(watermark, candle.low)
+            stop = direction == .bullish ? max(stop, watermark - width) : min(stop, watermark + width)
+            previous = candle
+        }
+        return nil
+    }
+
     private func directionalReturnPercent(_ price: Double) -> Double {
         switch direction {
         case .bullish: (price - entryPrice) / entryPrice * 100
         case .bearish: (entryPrice - price) / entryPrice * 100
         }
+    }
+
+    /// Re-anchors the trade to the moment price moved another
+    /// `additionalPercent` past the recorded event price — "wait for +x% of
+    /// follow-through before opening the position". Returns nil when the
+    /// window never reached that trigger, so no position is opened at all.
+    func enteringAfter(additionalPercent: Double) -> BreakoutScenarioEntry? {
+        guard additionalPercent > 0, entryPrice > 0 else { return self }
+        let triggerPrice = direction == .bullish
+            ? entryPrice * (1 + additionalPercent / 100)
+            : entryPrice * (1 - additionalPercent / 100)
+        guard let index = observedCandles.firstIndex(where: { candle in
+            direction == .bullish ? candle.high >= triggerPrice : candle.low <= triggerPrice
+        }) else { return nil }
+        // The position opens intrabar at the trigger; observation starts on
+        // that same candle, so a candle spanning trigger and stop still
+        // resolves pessimistically inside exit().
+        let observed = Array(observedCandles[index...])
+        return BreakoutScenarioEntry(
+            id: id,
+            symbol: symbol,
+            direction: direction,
+            regimeScore: regimeScore,
+            readinessScore: readinessScore,
+            breakoutQualityScore: breakoutQualityScore,
+            confirmationScore: confirmationScore,
+            relativeStrengthScore: relativeStrengthScore,
+            trendScore: trendScore,
+            trendEntry: trendEntry,
+            marketState: marketState,
+            marketStateScore: marketStateScore,
+            marketStateChange: marketStateChange,
+            falseBreakoutRisk: falseBreakoutRisk,
+            volumeRatio: volumeRatio,
+            quoteVolume24h: quoteVolume24h,
+            entryPrice: triggerPrice,
+            latestPrice: observed.last?.close ?? triggerPrice,
+            maximumObservedPrice: observed.map(\.high).max() ?? triggerPrice,
+            minimumObservedPrice: observed.map(\.low).min() ?? triggerPrice,
+            entryDate: observed[0].openTime,
+            observedCandles: observed
+        )
     }
 }
 
@@ -171,146 +279,94 @@ struct BreakoutScenarioResult: Sendable {
 }
 
 actor AnalysisInsightsService {
-    /// Row cap on the journey-event query. The query is ordered by 24h volume,
-    /// so even a truncated window starts with the coins most worth acting on.
+    /// Row cap on the Market State transition query.
     private static let eventRowLimit = 800
-
-    /// The scenario replays every universe coin that produced a matching signal
-    /// in the window — the scan universe is 100 coins and observation candles
-    /// come straight from Binance in parallel, so covering all of them is cheap.
-    /// The volume filter on the page is what narrows this down, not a hard cap.
     private static let scenarioSymbolLimit = 100
 
-    private struct Model: Decodable, Sendable {
-        let slug: String
-        let display_name: String
-    }
-
-    private struct Symbol: Decodable, Sendable {
+    private struct ScenarioStateRow: Decodable, Sendable {
+        let symbol_id: UUID
         let symbol: String
-        let quote_volume_24h: Double?
-    }
-
-    private struct ScenarioEventRow: Decodable, Sendable {
-        let id: UUID
-        let status: String
-        let price: Double
+        let state: MarketStateKind
+        let state_score: Int
+        let state_score_change: Int?
         let candle_close_time: String
-        let confidence: Int
-        let regime_score: Int?
-        let readiness_score: Int?
-        let breakout_quality_score: Int?
-        let confirmation_score: Int?
-        let relative_strength_score: Int?
-        let false_breakout_risk: Int
-        let volume_ratio: Double?
-        /// The coin's 24h volume when the event happened. Filtering on this
-        /// instead of the live volume keeps the replay deterministic: a coin
-        /// whose volume fell overnight no longer loses its past trades.
+        let close_price: Double?
         let quote_volume_24h: Double?
-        let analysis_models: Model
-        let symbols: Symbol
     }
 
     func scenarioEntries(
-        modelSlug: String,
-        direction: JourneyDirection,
         timeframe: String,
-        status: SignalStatus,
         lookback: ScenarioLookback
     ) async throws -> BreakoutScenarioResult {
-        var components = URLComponents(url: SupabaseConfig.projectURL.appending(path: "rest/v1/signal_journey_events"), resolvingAgainstBaseURL: false)!
-        var queryItems: [URLQueryItem] = [
-            .init(name: "select", value: "id,status,price,candle_close_time,confidence,regime_score,readiness_score,breakout_quality_score,confirmation_score,relative_strength_score,false_breakout_risk,volume_ratio,quote_volume_24h,analysis_models!inner(slug,display_name),symbols!inner(symbol,quote_volume_24h)"),
-            .init(name: "status", value: "eq.\(Self.databaseStatus(status))"),
-            .init(name: "timeframe", value: "eq.\(timeframe)"),
-            .init(name: "analysis_models.slug", value: "eq.\(modelSlug)"),
-            .init(name: "candle_close_time", value: "gte.\(Self.iso8601(lookback.since))"),
-            // Highest-volume coins first, so even a truncated window always
-            // contains the entries most worth acting on.
-            .init(name: "order", value: "symbols(quote_volume_24h).desc,candle_close_time.desc"),
-            .init(name: "limit", value: "\(Self.eventRowLimit)"),
-        ]
-        if modelSlug == "double-bottom-v1" || modelSlug == "double-top-v1" {
-            // Never mix legacy all-purpose confidence rows into the independent
-            // v2 pattern layers shown by the scenario screen.
-            queryItems.append(.init(name: "scoring_version", value: "eq.breakout-scores-v2-pattern"))
-        }
-        components.queryItems = queryItems
-        var allRows: [ScenarioEventRow]
-        do {
-            allRows = try await get([ScenarioEventRow].self, url: components.url!)
-        } catch {
-            // The event-level volume column ships in a migration; if that has
-            // not been applied yet the select 400s. Retry without the column
-            // so the page keeps working on the live-volume fallback.
-            components.queryItems = queryItems.map { item in
-                item.name == "select"
-                    ? URLQueryItem(name: "select", value: item.value?.replacingOccurrences(of: ",quote_volume_24h,analysis_models", with: ",analysis_models"))
-                    : item
-            }
-            allRows = try await get([ScenarioEventRow].self, url: components.url!)
-        }
-        let eligibleRows = allRows.filter { CryptoAssetUniverse.includes(symbol: $0.symbols.symbol) }
-        // Rows arrive ordered by volume, so the first N distinct symbols are the
-        // highest-volume coins that actually produced this signal in the window.
-        // Only those are replayed; everything else would just slow the page down.
+        let allRows: [ScenarioStateRow] = try await rpc(
+            "market_state_scenario_entries",
+            body: [
+                "p_timeframe": timeframe,
+                "p_since": Self.iso8601(lookback.since),
+                "p_limit": Self.eventRowLimit,
+            ]
+        )
+        let eligibleRows = allRows.filter { CryptoAssetUniverse.includes(symbol: $0.symbol) }
         var selectedSymbols: [String] = []
-        for row in eligibleRows where !selectedSymbols.contains(row.symbols.symbol) {
-            selectedSymbols.append(row.symbols.symbol)
+        for row in eligibleRows where !selectedSymbols.contains(row.symbol) {
+            selectedSymbols.append(row.symbol)
             if selectedSymbols.count >= Self.scenarioSymbolLimit { break }
         }
-        let rows = eligibleRows.filter { selectedSymbols.contains($0.symbols.symbol) }
-        let droppedSymbols = Set(eligibleRows.map(\.symbols.symbol)).count - selectedSymbols.count
+        let rows = eligibleRows.filter { selectedSymbols.contains($0.symbol) }
+        let droppedSymbols = Set(eligibleRows.map(\.symbol)).count - selectedSymbols.count
         let interval = lookback.observationInterval
-        let grouped = Dictionary(grouping: rows, by: { $0.symbols.symbol })
+        let grouped = Dictionary(grouping: rows, by: \.symbol)
         let entries = await withTaskGroup(of: [BreakoutScenarioEntry].self) { group in
             for (symbol, events) in grouped {
                 group.addTask {
-                    let datedEvents = events.compactMap { row -> (ScenarioEventRow, Date)? in
+                    let datedEvents = events.compactMap { row -> (ScenarioStateRow, Date)? in
                         guard let date = Self.date(row.candle_close_time) else { return nil }
                         return (row, date)
                     }
                     guard let earliest = datedEvents.map({ $0.1 }).min() else { return [] }
-                    // One failed fetch silently deleted every trade of the
-                    // coin from the replay — on wide windows the burst of 100
-                    // parallel requests made that common enough that a 7-day
-                    // scenario could shrink to a handful of coins. Retry with
-                    // backoff before giving the symbol up.
                     var candles: [PriceCandle]?
                     for attempt in 0..<3 {
                         candles = try? await CandleService().candles(
                             for: symbol,
                             interval: interval,
-                            startingAt: earliest,
-                            limit: lookback.observationCandleLimit
+                            // One 15m candle before the transition supplies a
+                            // close price for history recorded before the DB
+                            // began freezing close_price on state rows.
+                            startingAt: earliest.addingTimeInterval(-900),
+                            limit: lookback.observationCandleLimit + 2
                         )
                         if candles != nil { break }
                         try? await Task.sleep(for: .milliseconds(500 * (attempt + 1)))
                     }
                     guard let candles else { return [] }
-                    return datedEvents.map { row, rawEntryDate in
-                        // The boundary, not Binance's boundary-minus-1ms: the
-                        // trade opens exactly when the entry candle closes.
+                    return datedEvents.compactMap { row, rawEntryDate in
                         let entryDate = rawEntryDate.ceiledToSecond
+                        let recordedClose = row.close_price ?? candles.last(where: {
+                            $0.closeTime.ceiledToSecond <= entryDate
+                        })?.close
+                        guard let entryPrice = recordedClose, entryPrice > 0 else { return nil }
                         let observed = candles.filter { $0.openTime >= entryDate }
                         return BreakoutScenarioEntry(
-                            id: row.id,
+                            id: UUID(),
                             symbol: symbol,
-                            status: status,
-                            direction: direction,
-                            regimeScore: row.regime_score ?? 0,
-                            readinessScore: row.readiness_score ?? 0,
-                            breakoutQualityScore: row.breakout_quality_score ?? row.confidence,
-                            confirmationScore: row.confirmation_score ?? 0,
-                            relativeStrengthScore: row.relative_strength_score,
-                            falseBreakoutRisk: row.false_breakout_risk,
-                            volumeRatio: row.volume_ratio ?? 0,
-                            quoteVolume24h: row.quote_volume_24h ?? row.symbols.quote_volume_24h ?? 0,
-                            entryPrice: row.price,
-                            latestPrice: observed.last?.close ?? row.price,
-                            maximumObservedPrice: observed.map(\.high).max() ?? row.price,
-                            minimumObservedPrice: observed.map(\.low).min() ?? row.price,
+                            direction: .bullish,
+                            regimeScore: 0,
+                            readinessScore: 0,
+                            breakoutQualityScore: row.state_score,
+                            confirmationScore: row.state_score,
+                            relativeStrengthScore: nil,
+                            trendScore: nil,
+                            trendEntry: row.state == .bullishConfirmation && row.state_score >= 75,
+                            marketState: row.state,
+                            marketStateScore: row.state_score,
+                            marketStateChange: row.state_score_change,
+                            falseBreakoutRisk: 0,
+                            volumeRatio: 0,
+                            quoteVolume24h: row.quote_volume_24h ?? 0,
+                            entryPrice: entryPrice,
+                            latestPrice: observed.last?.close ?? entryPrice,
+                            maximumObservedPrice: observed.map(\.high).max() ?? entryPrice,
+                            minimumObservedPrice: observed.map(\.low).min() ?? entryPrice,
                             entryDate: entryDate,
                             observedCandles: observed
                         )
@@ -321,31 +377,29 @@ actor AnalysisInsightsService {
             for await batch in group { values.append(contentsOf: batch) }
             return values
         }
-        let volumeBySymbol = Dictionary(
-            rows.map { ($0.symbols.symbol, $0.symbols.quote_volume_24h ?? 0) },
-            uniquingKeysWith: { first, _ in first }
-        )
         return BreakoutScenarioResult(
-            // Highest 24h volume first; recency breaks ties within a coin.
             entries: entries.sorted {
-                let lhs = volumeBySymbol[$0.symbol] ?? 0
-                let rhs = volumeBySymbol[$1.symbol] ?? 0
-                if lhs != rhs { return lhs > rhs }
+                if $0.quoteVolume24h != $1.quoteVolume24h { return $0.quoteVolume24h > $1.quoteVolume24h }
                 return $0.entryDate > $1.entryDate
             },
             isTruncated: allRows.count >= Self.eventRowLimit || droppedSymbols > 0
         )
     }
 
-    private func get<T: Decodable>(_ type: T.Type, url: URL) async throws -> T {
+    private func rpc<T: Decodable>(_ name: String, body: [String: Any]) async throws -> T {
         let token = try await UserSyncService.shared.accessToken()
-        var request = URLRequest(url: url)
+        var request = URLRequest(url: SupabaseConfig.projectURL.appending(path: "rest/v1/rpc/\(name)"))
+        request.httpMethod = "POST"
         request.setValue(SupabaseConfig.publishableKey, forHTTPHeaderField: "apikey")
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
         request.timeoutInterval = 20
         let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else { throw URLError(.badServerResponse) }
-        return try JSONDecoder().decode(type, from: data)
+        guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else {
+            throw URLError(.badServerResponse)
+        }
+        return try JSONDecoder().decode(T.self, from: data)
     }
 
     private static func iso8601(_ date: Date) -> String {
@@ -360,15 +414,4 @@ actor AnalysisInsightsService {
         return formatter.date(from: value) ?? ISO8601DateFormatter().date(from: value)
     }
 
-    private static func databaseStatus(_ status: SignalStatus) -> String {
-        switch status {
-        case .watching: "watching"
-        case .preBreakout: "pre_breakout"
-        case .breakoutDetected: "breakout_detected"
-        case .confirmed: "confirmed"
-        case .retest: "retest"
-        case .failed: "failed"
-        case .expired: "expired"
-        }
-    }
 }

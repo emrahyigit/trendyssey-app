@@ -9,11 +9,27 @@ struct TrendysseyApp: App {
     @AppStorage("themeMode") private var themeMode = AppThemeMode.system.rawValue
 
     init() {
-        // EMA Cross was retired as a selectable breakout model. Existing
-        // installs move to the new production default instead of requesting an
-        // inactive backend slug while still showing the old picker label.
-        if UserDefaults.standard.string(forKey: JourneyModel.storageKey) == JourneyModel.emaCross.rawValue {
-            UserDefaults.standard.set(JourneyModel.donchian20.rawValue, forKey: JourneyModel.storageKey)
+        // The product now has one Market State approach. Migrate every legacy
+        // model selection to that single production choice.
+        if UserDefaults.standard.string(forKey: JourneyModel.storageKey) != JourneyModel.emaCross.rawValue {
+            UserDefaults.standard.set(JourneyModel.emaCross.rawValue, forKey: JourneyModel.storageKey)
+        }
+        // Preserve custom alert selections. Users who still had every former
+        // default state selected inherit the newly introduced momentum state.
+        let notificationKey = "notificationMarketStates"
+        let oldDefaults: Set<String> = [
+            "neutral", "selling_dominant", "seller_impact_fading",
+            "buy_side_absorption", "bounce_attempt", "bullish_confirmation",
+            "breakdown_risk"
+        ]
+        if let stored = UserDefaults.standard.string(forKey: notificationKey) {
+            let selected = Set(stored.split(separator: ",").map(String.init))
+            if selected == oldDefaults {
+                UserDefaults.standard.set(
+                    (selected.union(["bullish_momentum"])).sorted().joined(separator: ","),
+                    forKey: notificationKey
+                )
+            }
         }
     }
 

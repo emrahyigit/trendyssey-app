@@ -45,13 +45,19 @@ actor JourneyBacktestService {
         let since = Date.now.addingTimeInterval(-lookbackHours * 3600)
         let interval = timeframe.rawValue
         var entries: [BreakoutScenarioEntry] = []
+        // BTC feeds the tournament model's momentum component, so on-device
+        // entries can carry a real trend score and A+ badge.
+        let btcCandles = (await candles(for: ["BTCUSDT"], interval: interval))["BTCUSDT"]
 
         for start in stride(from: 0, to: symbols.count, by: 8) {
             if Task.isCancelled { break }
             let batch = Array(symbols[start..<min(start + 8, symbols.count)])
             let candlesBySymbol = await candles(for: batch, interval: interval)
             for (symbol, candles) in candlesBySymbol {
-                guard let analysis = JourneyAnalyzer.analyze(model: model, candles: candles) else { continue }
+                let analyzed: JourneyAnalysis? = model == .emaCross
+                    ? TournamentJourneyAnalyzer.analyze(candles: candles, btcCandles: btcCandles)
+                    : JourneyAnalyzer.analyze(model: model, candles: candles)
+                guard let analysis = analyzed else { continue }
                 var indexByCloseTime: [Date: Int] = [:]
                 for (index, candle) in analysis.candles.enumerated() { indexByCloseTime[candle.closeTime] = index }
 
@@ -61,7 +67,6 @@ actor JourneyBacktestService {
                     let observed = Array(analysis.candles[(index + 1)...])
                     let fallbackConfirmation = switch event.status {
                     case .confirmed: 100
-                    case .retest: 60
                     case .breakoutDetected: 35
                     default: 0
                     }
@@ -69,7 +74,6 @@ actor JourneyBacktestService {
                         BreakoutScenarioEntry(
                             id: UUID(),
                             symbol: symbol,
-                            status: status,
                             direction: model.direction,
                             // The score describes the symbol's current journey, not
                             // this historical event; it is the closest stand-in the
@@ -78,9 +82,14 @@ actor JourneyBacktestService {
                             readinessScore: analysis.scoreLayers?.readinessScore ?? analysis.confidence,
                             breakoutQualityScore: analysis.scoreLayers?.breakoutQualityScore ?? analysis.confidence,
                             confirmationScore: analysis.scoreLayers?.confirmationScore ?? fallbackConfirmation,
-                            // The device replay has no BTC series; unmeasured
-                            // entries pass the relative-strength filter.
+                            // The device replay has no universe-wide ranking;
+                            // unmeasured entries pass the vs-BTC filter.
                             relativeStrengthScore: nil,
+                            trendScore: analysis.trendScore,
+                            trendEntry: analysis.aPlusEventTimes.contains(event.time),
+                            marketState: nil,
+                            marketStateScore: nil,
+                            marketStateChange: nil,
                             falseBreakoutRisk: max(0, 100 - analysis.confidence),
                             volumeRatio: analysis.volumeRatio,
                             quoteVolume24h: volumeBySymbol[symbol] ?? 0,

@@ -34,81 +34,7 @@ enum CryptoAssetUniverse {
 }
 
 enum SignalStatus: String, CaseIterable, Codable, Sendable {
-    case watching, preBreakout, breakoutDetected, confirmed, retest, failed, expired
-
-    static var userSelectableCases: [SignalStatus] {
-        allCases.filter { $0 != .watching }
-    }
-
-    static var scenarioEntryCases: [SignalStatus] {
-        userSelectableCases.filter { $0 != .failed && $0 != .expired }
-    }
-
-    var title: String { title(.bullish) }
-
-    /// Reversal models such as Double Top run the same lifecycle downward, so the
-    /// phase names flip with the journey direction.
-    func title(_ direction: JourneyDirection) -> String {
-        switch self {
-        case .watching: L10n.text("Being Watched", "İzleniyor")
-        case .preBreakout: direction == .bullish
-            ? L10n.text("Waiting for Breakout", "Kırılım Bekleniyor")
-            : L10n.text("Waiting for Breakdown", "Düşüş Bekleniyor")
-        case .breakoutDetected: direction == .bullish
-            ? L10n.text("Breakout Started", "Kırılım Başladı")
-            : L10n.text("Breakdown Started", "Düşüş Başladı")
-        case .confirmed: direction == .bullish
-            ? L10n.text("Breakout Strengthening", "Kırılım Güçleniyor")
-            : L10n.text("Breakdown Strengthening", "Düşüş Güçleniyor")
-        case .retest: L10n.text("Level Being Tested", "Seviye Test Ediliyor")
-        case .failed: L10n.text("Signal Invalidated", "Sinyal Geçersiz Oldu")
-        case .expired: L10n.text("Tracking Complete", "Takip Tamamlandı")
-        }
-    }
-
-    var phaseTitle: String { phaseTitle(.bullish) }
-
-    func phaseTitle(_ direction: JourneyDirection) -> String {
-        direction == .bullish
-            ? L10n.text("Breakout Journey", "Kırılım Süreci")
-            : L10n.text("Breakdown Journey", "Düşüş Süreci")
-    }
-
-    /// User-facing progress only. Backend lifecycle states remain unchanged.
-    var journeyStep: Int {
-        switch self {
-        case .watching: 0
-        case .preBreakout: 1
-        case .breakoutDetected: 2
-        case .confirmed, .retest: 3
-        case .failed, .expired: 4
-        }
-    }
-
-    var journeyGuidance: String { journeyGuidance(.bullish) }
-
-    func journeyGuidance(_ direction: JourneyDirection) -> String {
-        switch self {
-        case .watching:
-            L10n.text("Market conditions are being monitored.", "Piyasa koşulları takip ediliyor.")
-        case .preBreakout:
-            direction == .bullish
-                ? L10n.text("A closed candle above the tracked level is expected.", "İzlenen seviyenin üzerinde mum kapanışı bekleniyor.")
-                : L10n.text("A closed candle below the tracked level is expected.", "İzlenen seviyenin altında mum kapanışı bekleniyor.")
-        case .breakoutDetected:
-            L10n.text("The move is being watched for staying power.", "Hareketin kalıcı olup olmadığı izleniyor.")
-        case .confirmed:
-            L10n.text("Strength and continuation are being monitored.", "Hareketin gücü ve devamlılığı izleniyor.")
-        case .retest:
-            direction == .bullish
-                ? L10n.text("The broken level is being checked for support.", "Kırılan seviyenin destek olarak korunup korunmadığı izleniyor.")
-                : L10n.text("The broken level is being checked for resistance.", "Kırılan seviyenin direnç olarak tutup tutmadığı izleniyor.")
-        case .failed:
-            L10n.text("Conditions weakened and this journey ended.", "Koşullar bozuldu ve bu süreç sonlandı.")
-        case .expired:
-            L10n.text("The monitoring window ended without a new transition.", "Yeni bir aşama oluşmadan takip süresi tamamlandı.")
-        }
-    }
+    case watching, preBreakout, breakoutDetected, confirmed, failed, expired
 }
 
 struct SignalScoreComponent: Codable, Hashable, Sendable, Identifiable {
@@ -122,6 +48,29 @@ struct SignalScoreComponent: Codable, Hashable, Sendable, Identifiable {
     let explanation: String
 
     var id: String { key }
+}
+
+struct TrendScoreComponents: Codable, Hashable, Sendable {
+    let breakout: Int
+    let regime: Int
+    let momentum: Int
+    let health: Int
+}
+
+/// The backend trend model (supabase `_shared/trend_score.ts`): Donchian-55
+/// breakout + EMA25/99 regime + 20-candle momentum vs BTC + chandelier health.
+/// The four components always sum to `score`.
+struct TrendScoreFacts: Codable, Hashable, Sendable {
+    let score: Int
+    let entrySignal: Bool
+    let components: TrendScoreComponents
+    let breakoutLevel: Double?
+    let clearanceAtr: Double?
+    let freshBreakout: Bool?
+    let regimeAligned: Bool?
+    let momentumExcess: Double?
+    /// Suggested trailing invalidation: 22-candle high minus 3×ATR.
+    let chandelierStop: Double?
 }
 
 struct SignalEvidence: Codable, Hashable, Sendable {
@@ -171,6 +120,7 @@ struct SignalEvidence: Codable, Hashable, Sendable {
     let secondPivotOpenTime: String?
     let confidenceFactors: [EvidenceConfidenceFactor]?
     let scoreLayers: SignalScoreLayers?
+    let trendScore: TrendScoreFacts?
 }
 
 struct SignalScoreLayers: Codable, Hashable, Sendable {
@@ -213,11 +163,13 @@ struct MarketSignal: Identifiable, Hashable, Sendable {
     let volumeRatio: Double
     let takerBuyRatio: Double
     let estimatedDelta: Double
-    let status: SignalStatus
     let signalDate: Date
     let explanation: String
     let evidence: SignalEvidence?
     let hasScore: Bool
+    let trendScore: Int?
+    let trendEntry: Bool
+    let marketState: MarketStateSnapshot?
 
     nonisolated init(
         id: UUID,
@@ -240,11 +192,13 @@ struct MarketSignal: Identifiable, Hashable, Sendable {
         volumeRatio: Double,
         takerBuyRatio: Double,
         estimatedDelta: Double,
-        status: SignalStatus,
         signalDate: Date,
         explanation: String,
         evidence: SignalEvidence? = nil,
-        hasScore: Bool = true
+        hasScore: Bool = true,
+        trendScore: Int? = nil,
+        trendEntry: Bool = false,
+        marketState: MarketStateSnapshot? = nil
     ) {
         self.id = id
         self.journeyID = journeyID
@@ -266,44 +220,26 @@ struct MarketSignal: Identifiable, Hashable, Sendable {
         self.volumeRatio = volumeRatio
         self.takerBuyRatio = takerBuyRatio
         self.estimatedDelta = estimatedDelta
-        self.status = status
         self.signalDate = signalDate
         self.explanation = explanation
         self.evidence = evidence
         self.hasScore = hasScore
+        self.trendScore = trendScore
+        self.trendEntry = trendEntry
+        self.marketState = marketState
+    }
+
+    var trendFacts: TrendScoreFacts? { evidence?.trendScore }
+    /// Prefers the dedicated column; falls back to the explanation facts.
+    var effectiveTrendScore: Int? { trendScore ?? trendFacts?.score }
+    /// A+ belongs entirely to a 75+ bullish Market State: either a confirmed
+    /// rebound or an independently strong continuation momentum state.
+    var isAPlusSetup: Bool {
+        marketState?.supportsAPlus == true
     }
 
     var baseSymbol: String { symbol.replacingOccurrences(of: "USDT", with: "") }
     var usesAdvancedJourneyModel: Bool { evidence?.model == "ema-7-25-99-v1" }
-    var qualityTitle: String {
-        L10n.text("Breakout quality", "Kırılım kalitesi")
-    }
-
-    /// The score that answers the current lifecycle question. A flat average is
-    /// misleading because confirmation is intentionally zero before a trigger.
-    var stageScore: Int {
-        switch status {
-        case .watching, .preBreakout:
-            readinessScore
-        case .breakoutDetected:
-            breakoutQualityScore
-        case .confirmed, .retest:
-            confirmationScore
-        case .failed, .expired:
-            breakoutQualityScore
-        }
-    }
-
-    var stageScoreTitle: String {
-        switch status {
-        case .watching, .preBreakout:
-            L10n.text("Readiness", "Hazırlık")
-        case .breakoutDetected, .failed, .expired:
-            L10n.text("Breakout quality", "Kırılım kalitesi")
-        case .confirmed, .retest:
-            L10n.text("Confirmation", "Teyit")
-        }
-    }
 }
 
 struct MarketOverview: Sendable {
