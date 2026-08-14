@@ -91,41 +91,6 @@ struct DashboardView: View {
                 if left != right { return left > right }
                 return $0.quoteVolume24h > $1.quoteVolume24h
             }
-        let bullishMomentumStates = overview.signals
-            .filter { $0.marketState?.state == .bullishMomentum }
-            .sorted {
-                let left = $0.marketState?.stateScore ?? 0
-                let right = $1.marketState?.stateScore ?? 0
-                if left != right { return left > right }
-                return $0.quoteVolume24h > $1.quoteVolume24h
-            }
-        VStack(alignment: .leading, spacing: 12) {
-            sectionTitle(
-                L10n.text("Strong Bullish Momentum", "Güçlü Yükseliş Momentumu"),
-                subtitle: L10n.text(
-                    "Coins already advancing with sustained closed-candle strength.",
-                    "Kapanmış mumlarda sürdürülebilir güçle hâlihazırda yükselen coinler."
-                )
-            )
-            if bullishMomentumStates.isEmpty {
-                emptyRow(
-                    L10n.text("No strong bullish momentum state right now", "Şu anda güçlü yükseliş momentumu durumu yok"),
-                    icon: "bolt.circle"
-                )
-            } else {
-                ScrollView(.horizontal) {
-                    LazyHStack(spacing: 12) {
-                        ForEach(bullishMomentumStates) { signal in
-                            NavigationLink(value: signal) { FeaturedSignalCard(signal: signal) }
-                                .buttonStyle(.plain)
-                                .containerRelativeFrame(.horizontal, count: 10, span: bullishMomentumStates.count > 1 ? 9 : 10, spacing: 12)
-                        }
-                    }.scrollTargetLayout()
-                }
-                .scrollIndicators(.hidden)
-                .scrollTargetBehavior(.viewAligned)
-            }
-        }
         VStack(alignment: .leading, spacing: 12) {
             sectionTitle(
                 L10n.text("Early Reversal States", "Erken Dönüş Durumları"),

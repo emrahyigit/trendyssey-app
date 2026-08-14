@@ -9,7 +9,6 @@ private enum ScenarioMarketStateFilter: String, CaseIterable, Identifiable {
     case buySideAbsorption = "buy_side_absorption"
     case bounceAttempt = "bounce_attempt"
     case bullishConfirmation = "bullish_confirmation"
-    case bullishMomentum = "bullish_momentum"
     case breakdownRisk = "breakdown_risk"
 
     var id: String { rawValue }

@@ -9,7 +9,6 @@ extension MarketStateKind {
         case .buySideAbsorption: TrendysseyColor.accent
         case .bounceAttempt: TrendysseyColor.positive
         case .bullishConfirmation: TrendysseyColor.positive
-        case .bullishMomentum: TrendysseyColor.positive
         case .breakdownRisk: TrendysseyColor.negative
         }
     }
@@ -22,7 +21,6 @@ extension MarketStateKind {
         case .buySideAbsorption: "shield.lefthalf.filled"
         case .bounceAttempt: "arrow.turn.up.right"
         case .bullishConfirmation: "checkmark.circle.fill"
-        case .bullishMomentum: "bolt.circle.fill"
         case .breakdownRisk: "exclamationmark.triangle.fill"
         }
     }
@@ -64,8 +62,7 @@ struct CurrentMarketStateCard: View {
             Metric(id: "absorption", title: L10n.text("Buy-side absorption", "Alıcı absorpsiyonu"), value: snapshot.absorption, change: snapshot.absorptionChange),
             Metric(id: "resilience", title: L10n.text("Price resilience", "Fiyat dayanıklılığı"), value: snapshot.priceResilience, change: snapshot.priceResilienceChange),
             Metric(id: "readiness", title: L10n.text("Bounce readiness", "Tepki hazırlığı"), value: snapshot.bounceReadiness, change: snapshot.bounceReadinessChange),
-            Metric(id: "confirmation", title: L10n.text("Confirmation", "Teyit"), value: snapshot.confirmation, change: snapshot.confirmationChange),
-            Metric(id: "momentum", title: L10n.text("Bullish momentum", "Yükseliş momentumu"), value: snapshot.bullishMomentum, change: snapshot.bullishMomentumChange)
+            Metric(id: "confirmation", title: L10n.text("Confirmation", "Teyit"), value: snapshot.confirmation, change: snapshot.confirmationChange)
         ]
     }
 
@@ -162,8 +159,6 @@ struct CurrentMarketStateCard: View {
             L10n.text("An upward response has started, but it still needs stronger confirmation.", "Yukarı yönlü bir tepki başladı ancak daha güçlü teyide ihtiyaç duyuyor.")
         case .bullishConfirmation:
             L10n.text("Buyer control is strengthening and the upward move is gaining confirmation.", "Alıcı kontrolü güçleniyor ve yukarı yönlü hareket teyit kazanıyor.")
-        case .bullishMomentum:
-            L10n.text("Price is advancing with strong, sustained upward momentum.", "Fiyat güçlü ve sürdürülebilir yükseliş momentumuyla ilerliyor.")
         case .breakdownRisk:
             L10n.text("Selling remains effective, so the risk of further downside is elevated.", "Satış etkili kalıyor; bu nedenle aşağı yönün devam riski yüksek.")
         }
@@ -205,10 +200,6 @@ struct CurrentMarketStateCard: View {
             subject = ("Upward confirmation", "Yukarı yönlü teyit")
             rising = ("strengthening", "güçleniyor")
             falling = ("fading", "zayıflıyor")
-        case "momentum":
-            subject = ("Bullish momentum", "Yükseliş momentumu")
-            rising = ("accelerating", "hızlanıyor")
-            falling = ("slowing", "yavaşlıyor")
         default:
             subject = (metric.title, metric.title)
             rising = ("rising", "artıyor")
@@ -247,7 +238,7 @@ struct CurrentMarketStateCard: View {
         switch metric.id {
         case "pressure", "response": metric.value >= 70 ? TrendysseyColor.negative : TrendysseyColor.warning
         case "efficiency": metric.value >= 65 ? TrendysseyColor.negative : TrendysseyColor.accent
-        case "absorption", "resilience", "readiness", "confirmation", "momentum": metric.value >= 65 ? TrendysseyColor.positive : TrendysseyColor.accent
+        case "absorption", "resilience", "readiness", "confirmation": metric.value >= 65 ? TrendysseyColor.positive : TrendysseyColor.accent
         default: TrendysseyColor.accent
         }
     }

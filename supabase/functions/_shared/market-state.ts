@@ -4,11 +4,14 @@
 // the latest closed-candle window: what is the market doing now? Historical
 // rows exist for validation, but the product consumes one current state per
 // symbol and timeframe.
+//
+// The product hunts reversals. A coin that is already advancing is not a
+// reversal candidate, so continuation is deliberately not a declared state —
+// sustained upside with nothing left to turn around resolves to neutral.
 
 import { atr, ema, type MarketCandle } from "./indicators.ts";
 
-export const MARKET_STATE_SCORING_VERSION =
-  "market-state-v3.1-bullish-momentum";
+export const MARKET_STATE_SCORING_VERSION = "market-state-v4-reversal";
 
 // Short timeframes need a wider sample to suppress single-candle noise, while
 // long timeframes need a tighter sample so the declared state does not lag by
@@ -35,7 +38,6 @@ export type MarketState =
   | "buy_side_absorption"
   | "bounce_attempt"
   | "bullish_confirmation"
-  | "bullish_momentum"
   | "breakdown_risk";
 
 export interface MarketStateObservation {
@@ -49,7 +51,6 @@ export interface MarketStateObservation {
   priceResilience: number;
   bounceReadiness: number;
   confirmation: number;
-  bullishMomentum: number;
   candleCloseTime: number;
   scoringVersion: string;
   features: {
@@ -95,7 +96,6 @@ interface RawWindow {
   compression: number;
   volumeExpansion: number;
   buyParticipation: number;
-  momentumRaw: number;
   swingHighBreak: boolean;
   positiveDeltaTurn: boolean;
   bullishBody: number;
@@ -246,11 +246,6 @@ function rawWindowAt(
     0,
   );
   const buyParticipation = recentQuote > 0 ? recentBuy / recentQuote : 0.5;
-  const momentumRaw = 0.40 * clamp(upsideAtr / 3) +
-    0.20 * bullishCloseFraction +
-    0.15 * nearHigh +
-    0.15 * clamp((volumeExpansion - 0.8) / 1.7) +
-    0.10 * clamp((buyParticipation - 0.48) / 0.12);
   const recentRange = Math.max(...recent.map((candle) => candle.high)) -
     recentLow;
   const priorRange = Math.max(...prior.map((candle) => candle.high)) - priorLow;
@@ -298,7 +293,6 @@ function rawWindowAt(
     compression,
     volumeExpansion,
     buyParticipation,
-    momentumRaw,
     swingHighBreak,
     positiveDeltaTurn,
     bullishBody,
@@ -334,19 +328,6 @@ export function classifyMarketState(
     metrics.confirmation >= 65
   ) {
     return { state: "bullish_confirmation", stateScore: metrics.confirmation };
-  }
-  // A clean continuation does not need a preceding sell-off or absorption
-  // phase. It is its own state: strong multi-candle impulse plus direct
-  // closed-candle confirmation. This keeps a coin such as ACE out of Neutral
-  // while preserving Bullish Confirmation for actual rebound structures.
-  if (metrics.bullishMomentum >= 70 && metrics.confirmation >= 55) {
-    return { state: "bullish_momentum", stateScore: metrics.bullishMomentum };
-  }
-  if (
-    previousState === "bullish_momentum" &&
-    metrics.bullishMomentum >= 60
-  ) {
-    return { state: "bullish_momentum", stateScore: metrics.bullishMomentum };
   }
   if (metrics.bounceReadiness >= 60 && metrics.confirmation >= 35) {
     return { state: "bounce_attempt", stateScore: metrics.bounceReadiness };
@@ -480,15 +461,6 @@ export function marketStateObservation(
       0.20 * current.bullishBody +
       0.20 * Number(current.ema7Reclaim),
   );
-  const bullishMomentum = score(
-    0.55 * percentileRank(
-          historical.map((value) => value.momentumRaw),
-          current.momentumRaw,
-        ) +
-      0.25 * (confirmation / 100) +
-      0.10 * current.nearHigh +
-      0.10 * clamp((current.buyParticipation - 0.48) / 0.12),
-  );
   const metrics = {
     sellingPressure,
     downsideResponse,
@@ -498,7 +470,6 @@ export function marketStateObservation(
     priceResilience,
     bounceReadiness,
     confirmation,
-    bullishMomentum,
   };
   const classification = classifyMarketState(metrics, previousState);
 

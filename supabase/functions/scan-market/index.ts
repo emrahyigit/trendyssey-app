@@ -148,7 +148,7 @@ async function persistMarketState(
   const { data: previous, error: previousError } = await supabase
     .from("market_state_current")
     .select(
-      "state,state_since,state_score,previous_state_score,state_score_change,selling_pressure,selling_pressure_change,downside_response,downside_response_change,seller_efficiency,seller_efficiency_change,absorption,absorption_change,price_resilience,price_resilience_change,bounce_readiness,bounce_readiness_change,confirmation,confirmation_change,bullish_momentum,bullish_momentum_change,candle_close_time,scoring_version",
+      "state,state_since,state_score,previous_state_score,state_score_change,selling_pressure,selling_pressure_change,downside_response,downside_response_change,seller_efficiency,seller_efficiency_change,absorption,absorption_change,price_resilience,price_resilience_change,bounce_readiness,bounce_readiness_change,confirmation,confirmation_change,candle_close_time,scoring_version",
     )
     .eq("symbol_id", symbolID)
     .eq("timeframe", timeframe)
@@ -247,12 +247,6 @@ async function persistMarketState(
       previous?.confirmation_change,
       rescoredPrior?.confirmation,
     ),
-    bullish_momentum_change: closeChange(
-      observation.bullishMomentum,
-      previous?.bullish_momentum,
-      previous?.bullish_momentum_change,
-      rescoredPrior?.bullishMomentum,
-    ),
   };
   const stateSince = previous?.state === observation.state &&
       previous?.state_since
@@ -271,7 +265,6 @@ async function persistMarketState(
     price_resilience: observation.priceResilience,
     bounce_readiness: observation.bounceReadiness,
     confirmation: observation.confirmation,
-    bullish_momentum: observation.bullishMomentum,
     ...componentChanges,
     scoring_version: observation.scoringVersion,
     raw_features: observation.features,

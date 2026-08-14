@@ -58,10 +58,6 @@ enum LegalCopy {
                         L10n.text(
                             "Bounce readiness and confirmation — whether an early response has begun and whether closed candles have confirmed it.",
                             "Tepki hazırlığı ve teyit — erken tepkinin başlayıp başlamadığı ve kapanmış mumların bunu doğrulayıp doğrulamadığı."
-                        ),
-                        L10n.text(
-                            "Bullish momentum — whether price is already advancing with sustained multi-candle strength, expanding activity and direct closed-candle confirmation.",
-                            "Yükseliş momentumu — fiyatın çoklu mum gücü, genişleyen aktivite ve doğrudan kapanış teyidiyle hâlihazırda yükselip yükselmediği."
                         )
                     ]
                 ),

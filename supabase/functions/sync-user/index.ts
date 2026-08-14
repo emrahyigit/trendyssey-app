@@ -9,7 +9,6 @@ const allowedMarketStates = new Set([
   "buy_side_absorption",
   "bounce_attempt",
   "bullish_confirmation",
-  "bullish_momentum",
   "breakdown_risk",
 ]);
 

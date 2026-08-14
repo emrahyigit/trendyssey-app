@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
 
-/// Badge for a 75+ confirmed reversal or strong bullish momentum state.
+/// Badge for a 75+ confirmed reversal state.
 struct APlusSetupBadge: View {
     var body: some View {
         Text(verbatim: "A+")

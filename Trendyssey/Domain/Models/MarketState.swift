@@ -7,7 +7,6 @@ enum MarketStateKind: String, Codable, CaseIterable, Sendable {
     case buySideAbsorption = "buy_side_absorption"
     case bounceAttempt = "bounce_attempt"
     case bullishConfirmation = "bullish_confirmation"
-    case bullishMomentum = "bullish_momentum"
     case breakdownRisk = "breakdown_risk"
 
     var title: String {
@@ -18,7 +17,6 @@ enum MarketStateKind: String, Codable, CaseIterable, Sendable {
         case .buySideAbsorption: L10n.text("Buy-side Absorption", "Alıcı Absorpsiyonu")
         case .bounceAttempt: L10n.text("Bounce Attempt", "Tepki Denemesi")
         case .bullishConfirmation: L10n.text("Bullish Confirmation", "Yukarı Yönlü Teyit")
-        case .bullishMomentum: L10n.text("Strong Bullish Momentum", "Güçlü Yükseliş Momentumu")
         case .breakdownRisk: L10n.text("Breakdown Risk", "Aşağı Kırılım Riski")
         }
     }
@@ -37,8 +35,6 @@ enum MarketStateKind: String, Codable, CaseIterable, Sendable {
             L10n.text("Price has started reacting upward after absorption, but the response is not fully confirmed.", "Fiyat absorpsiyon sonrasında yukarı tepki vermeye başladı; hareket henüz tam teyitli değil.")
         case .bullishConfirmation:
             L10n.text("Buyer response has produced closed-candle confirmation after a weakening in seller impact.", "Satıcı etkisi zayıfladıktan sonra alıcı tepkisi kapanmış mum teyidi üretti.")
-        case .bullishMomentum:
-            L10n.text("Price is advancing with strong multi-candle momentum and direct closed-candle confirmation.", "Fiyat, güçlü çoklu mum momentumu ve doğrudan kapanmış mum teyidiyle yükseliyor.")
         case .breakdownRisk:
             L10n.text("Selling pressure and seller efficiency are both high; downside continuation risk is elevated.", "Satış baskısı ve satıcı etkinliği birlikte yüksek; düşüşün devam riski arttı.")
         }
@@ -50,7 +46,7 @@ enum MarketStateKind: String, Codable, CaseIterable, Sendable {
         case .bounceAttempt: 4
         case .buySideAbsorption: 3
         case .sellerImpactFading: 2
-        case .neutral, .bullishMomentum, .sellingDominant, .breakdownRisk: 0
+        case .neutral, .sellingDominant, .breakdownRisk: 0
         }
     }
 }
@@ -80,15 +76,12 @@ struct MarketStateSnapshot: Codable, Hashable, Sendable {
     let bounceReadinessChange: Int?
     let confirmation: Int
     let confirmationChange: Int?
-    let bullishMomentum: Int
-    let bullishMomentumChange: Int?
     let stateSince: Date
     let candleCloseTime: Date
     let scoringVersion: String
 
     var hasActiveState: Bool { state != .neutral }
     var supportsAPlus: Bool {
-        (state == .bullishConfirmation || state == .bullishMomentum) &&
-            stateScore >= Self.aPlusMinimumScore
+        state == .bullishConfirmation && stateScore >= Self.aPlusMinimumScore
     }
 }

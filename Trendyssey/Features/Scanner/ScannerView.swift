@@ -18,7 +18,7 @@ struct ScannerView: View {
 
     private static let filterStates: [MarketStateKind] = [
         .buySideAbsorption, .sellerImpactFading, .bounceAttempt,
-        .bullishConfirmation, .bullishMomentum, .sellingDominant, .breakdownRisk, .neutral
+        .bullishConfirmation, .sellingDominant, .breakdownRisk, .neutral
     ]
 
     @Environment(AppEnvironment.self) private var environment

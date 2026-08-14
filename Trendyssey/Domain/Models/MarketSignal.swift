@@ -232,8 +232,7 @@ struct MarketSignal: Identifiable, Hashable, Sendable {
     var trendFacts: TrendScoreFacts? { evidence?.trendScore }
     /// Prefers the dedicated column; falls back to the explanation facts.
     var effectiveTrendScore: Int? { trendScore ?? trendFacts?.score }
-    /// A+ belongs entirely to a 75+ bullish Market State: either a confirmed
-    /// rebound or an independently strong continuation momentum state.
+    /// A+ belongs entirely to a 75+ confirmed rebound Market State.
     var isAPlusSetup: Bool {
         marketState?.supportsAPlus == true
     }

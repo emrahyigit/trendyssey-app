@@ -25,8 +25,6 @@ actor MarketStateService {
         let bounce_readiness_change: Int?
         let confirmation: Int
         let confirmation_change: Int?
-        let bullish_momentum: Int
-        let bullish_momentum_change: Int?
         let state_since: Date
         let candle_close_time: Date
         let scoring_version: String
@@ -53,8 +51,6 @@ actor MarketStateService {
                 bounceReadinessChange: bounce_readiness_change,
                 confirmation: confirmation,
                 confirmationChange: confirmation_change,
-                bullishMomentum: bullish_momentum,
-                bullishMomentumChange: bullish_momentum_change,
                 stateSince: state_since,
                 candleCloseTime: candle_close_time,
                 scoringVersion: scoring_version
@@ -68,7 +64,7 @@ actor MarketStateService {
             resolvingAgainstBaseURL: false
         )!
         components.queryItems = [
-            .init(name: "select", value: "state,state_score,previous_state_score,state_score_change,selling_pressure,selling_pressure_change,downside_response,downside_response_change,seller_efficiency,seller_efficiency_change,efficiency_change,absorption,absorption_change,price_resilience,price_resilience_change,bounce_readiness,bounce_readiness_change,confirmation,confirmation_change,bullish_momentum,bullish_momentum_change,state_since,candle_close_time,scoring_version,symbols!inner(symbol)"),
+            .init(name: "select", value: "state,state_score,previous_state_score,state_score_change,selling_pressure,selling_pressure_change,downside_response,downside_response_change,seller_efficiency,seller_efficiency_change,efficiency_change,absorption,absorption_change,price_resilience,price_resilience_change,bounce_readiness,bounce_readiness_change,confirmation,confirmation_change,state_since,candle_close_time,scoring_version,symbols!inner(symbol)"),
             .init(name: "timeframe", value: "eq.\(timeframe)"),
             .init(name: "limit", value: "1000")
         ]

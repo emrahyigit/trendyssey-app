@@ -69,7 +69,6 @@ const MARKET_STATE_TR: Record<string, string> = {
   buy_side_absorption: "Alıcı absorpsiyonu",
   bounce_attempt: "Tepki denemesi",
   bullish_confirmation: "Yukarı yönlü teyit",
-  bullish_momentum: "Güçlü yükseliş momentumu",
   breakdown_risk: "Aşağı kırılım riski",
 };
 
@@ -80,7 +79,6 @@ const MARKET_STATE_EN: Record<string, string> = {
   buy_side_absorption: "Buy-side absorption",
   bounce_attempt: "Bounce attempt",
   bullish_confirmation: "Bullish confirmation",
-  bullish_momentum: "Strong bullish momentum",
   breakdown_risk: "Breakdown risk",
 };
 

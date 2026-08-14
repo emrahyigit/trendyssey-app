@@ -126,7 +126,7 @@ Deno.test("forming candle is outside the engine contract", () => {
   const candles = baseline(170);
   const result = marketStateObservation(candles, "4h")!;
   assertEquals(result.candleCloseTime, candles.at(-1)!.closeTime);
-  assertEquals(result.scoringVersion, "market-state-v3.1-bullish-momentum");
+  assertEquals(result.scoringVersion, "market-state-v4-reversal");
 });
 
 Deno.test("market-state window adapts to every supported timeframe", () => {
@@ -152,7 +152,6 @@ Deno.test("seller impact fading alone cannot promote weak context to confirmatio
     priceResilience: 45,
     bounceReadiness: 10,
     confirmation: 76,
-    bullishMomentum: 20,
   };
 
   assertEquals(
@@ -165,7 +164,10 @@ Deno.test("seller impact fading alone cannot promote weak context to confirmatio
   );
 });
 
-Deno.test("strong continuation momentum is independent from rebound context", () => {
+// A coin already trending up has nothing left to reverse. Strong confirmation
+// on its own — no absorption context, no bounce readiness — must stay neutral
+// rather than earning a continuation state of its own.
+Deno.test("pure continuation without reversal context stays neutral", () => {
   const metrics = {
     sellingPressure: 56,
     downsideResponse: 0,
@@ -175,30 +177,14 @@ Deno.test("strong continuation momentum is independent from rebound context", ()
     priceResilience: 56,
     bounceReadiness: 11,
     confirmation: 78,
-    bullishMomentum: 88,
   };
 
   assertEquals(
     classifyMarketState(metrics, "neutral"),
-    { state: "bullish_momentum", stateScore: 88 },
+    { state: "neutral", stateScore: 0 },
   );
-});
-
-Deno.test("one weak close does not erase sustained bullish momentum", () => {
-  const metrics = {
-    sellingPressure: 50,
-    downsideResponse: 5,
-    sellerEfficiency: 10,
-    efficiencyChange: 0,
-    absorption: 10,
-    priceResilience: 45,
-    bounceReadiness: 10,
-    confirmation: 0,
-    bullishMomentum: 61,
-  };
-
   assertEquals(
-    classifyMarketState(metrics, "bullish_momentum"),
-    { state: "bullish_momentum", stateScore: 61 },
+    classifyMarketState(metrics, "bullish_confirmation"),
+    { state: "neutral", stateScore: 0 },
   );
 });

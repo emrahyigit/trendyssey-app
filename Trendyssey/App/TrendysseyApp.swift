@@ -14,19 +14,15 @@ struct TrendysseyApp: App {
         if UserDefaults.standard.string(forKey: JourneyModel.storageKey) != JourneyModel.emaCross.rawValue {
             UserDefaults.standard.set(JourneyModel.emaCross.rawValue, forKey: JourneyModel.storageKey)
         }
-        // Preserve custom alert selections. Users who still had every former
-        // default state selected inherit the newly introduced momentum state.
+        // The retired momentum state would otherwise sit in stored alert
+        // selections forever and be rejected by the server on every sync.
+        // Drop it and leave the rest of the user's choices untouched.
         let notificationKey = "notificationMarketStates"
-        let oldDefaults: Set<String> = [
-            "neutral", "selling_dominant", "seller_impact_fading",
-            "buy_side_absorption", "bounce_attempt", "bullish_confirmation",
-            "breakdown_risk"
-        ]
         if let stored = UserDefaults.standard.string(forKey: notificationKey) {
-            let selected = Set(stored.split(separator: ",").map(String.init))
-            if selected == oldDefaults {
+            let selected = stored.split(separator: ",").map(String.init)
+            if selected.contains("bullish_momentum") {
                 UserDefaults.standard.set(
-                    (selected.union(["bullish_momentum"])).sorted().joined(separator: ","),
+                    selected.filter { $0 != "bullish_momentum" }.joined(separator: ","),
                     forKey: notificationKey
                 )
             }
