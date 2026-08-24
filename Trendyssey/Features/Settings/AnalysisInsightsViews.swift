@@ -3,13 +3,18 @@ import Charts
 
 private enum ScenarioMarketStateFilter: String, CaseIterable, Identifiable {
     case any
-    case neutral
-    case sellingDominant = "selling_dominant"
-    case sellerImpactFading = "seller_impact_fading"
+    case buyerTakeover = "buyer_takeover"
+    case sellerExhaustion = "seller_exhaustion"
     case buySideAbsorption = "buy_side_absorption"
-    case bounceAttempt = "bounce_attempt"
-    case bullishConfirmation = "bullish_confirmation"
-    case breakdownRisk = "breakdown_risk"
+    case sellerImpactFading = "seller_impact_fading"
+    case sellerDominance = "seller_dominance"
+    case buyerDominance = "buyer_dominance"
+    case buyerImpactFading = "buyer_impact_fading"
+    case sellSideAbsorption = "sell_side_absorption"
+    case buyerExhaustion = "buyer_exhaustion"
+    case sellerTakeover = "seller_takeover"
+    case balanced
+    case lowParticipation = "low_participation"
 
     var id: String { rawValue }
     var state: MarketStateKind? { MarketStateKind(rawValue: rawValue) }
@@ -32,7 +37,7 @@ struct DailyBreakoutSimulatorView: View {
     @AppStorage("scenarioMaxOpenHours") private var maxOpenHours = 72
     /// State frozen on the entry candle. Confirmation is the conservative
     /// default; "any" keeps older history without a state snapshot visible.
-    @AppStorage("scenarioRequiredMarketState") private var requiredMarketStateRaw = ScenarioMarketStateFilter.bullishConfirmation.rawValue
+    @AppStorage("scenarioRequiredMarketState") private var requiredMarketStateRaw = ScenarioMarketStateFilter.buyerTakeover.rawValue
     /// The tournament winner's exit: a stop trailing the high watermark by
     /// multiplier × ATR, no profit target. On by default — it beat the fixed
     /// target/stop pair with every entry method on every timeframe.
@@ -55,7 +60,7 @@ struct DailyBreakoutSimulatorView: View {
         Binding(get: { lookback }, set: { lookbackHours = $0.rawValue })
     }
     private var requiredMarketState: ScenarioMarketStateFilter {
-        ScenarioMarketStateFilter(rawValue: requiredMarketStateRaw) ?? .bullishConfirmation
+        ScenarioMarketStateFilter(rawValue: requiredMarketStateRaw) ?? .buyerTakeover
     }
 
     private struct SimulatedTrade: Identifiable {
@@ -273,7 +278,7 @@ struct DailyBreakoutSimulatorView: View {
         minimumDivide = 5
         minimumVolumeMillions = 10
         minimumStateScore = 0
-        requiredMarketStateRaw = ScenarioMarketStateFilter.bullishConfirmation.rawValue
+        requiredMarketStateRaw = ScenarioMarketStateFilter.buyerTakeover.rawValue
         useChandelierExit = true
         chandelierMultiplier = 3
     }

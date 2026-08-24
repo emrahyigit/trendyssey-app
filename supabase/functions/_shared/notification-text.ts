@@ -63,23 +63,33 @@ const PHASE_EN: Record<string, { bullish: string; bearish: string }> = {
 };
 
 const MARKET_STATE_TR: Record<string, string> = {
-  neutral: "Nötr",
-  selling_dominant: "Satış baskın",
-  seller_impact_fading: "Satıcı etkisi zayıflıyor",
-  buy_side_absorption: "Alıcı absorpsiyonu",
-  bounce_attempt: "Tepki denemesi",
-  bullish_confirmation: "Yukarı yönlü teyit",
-  breakdown_risk: "Aşağı kırılım riski",
+  seller_dominance: "Satıcılar kontrolde",
+  seller_impact_fading: "Satışın etkisi zayıflıyor",
+  buy_side_absorption: "Alıcılar satışı topluyor",
+  seller_exhaustion: "Satış gücü tükeniyor",
+  buyer_takeover: "Kontrol alıcılara geçiyor",
+  buyer_dominance: "Alıcılar kontrolde",
+  buyer_impact_fading: "Alımın etkisi zayıflıyor",
+  sell_side_absorption: "Satıcılar alımı karşılıyor",
+  buyer_exhaustion: "Alım gücü tükeniyor",
+  seller_takeover: "Kontrol satıcılara geçiyor",
+  balanced: "İki taraf da sahada",
+  low_participation: "Piyasa durgun",
 };
 
 const MARKET_STATE_EN: Record<string, string> = {
-  neutral: "Neutral",
-  selling_dominant: "Selling dominant",
-  seller_impact_fading: "Seller impact fading",
-  buy_side_absorption: "Buy-side absorption",
-  bounce_attempt: "Bounce attempt",
-  bullish_confirmation: "Bullish confirmation",
-  breakdown_risk: "Breakdown risk",
+  seller_dominance: "Sellers in control",
+  seller_impact_fading: "Selling impact fading",
+  buy_side_absorption: "Buyers absorbing the selling",
+  seller_exhaustion: "Selling force running out",
+  buyer_takeover: "Buyers taking control",
+  buyer_dominance: "Buyers in control",
+  buyer_impact_fading: "Buying impact fading",
+  sell_side_absorption: "Sellers meeting the buying",
+  buyer_exhaustion: "Buying force running out",
+  seller_takeover: "Sellers taking control",
+  balanced: "Both sides active",
+  low_participation: "Market is quiet",
 };
 
 /** Compact dollar volume: 1_234_567_890 -> "$1.23B". */
@@ -120,8 +130,8 @@ export function composeNotification(
     : (stateTable[input.marketState] ?? input.marketState);
   const title = `${input.baseAsset} · ${state}`;
   const volume = formatVolume(input.quoteVolume24h);
-  const strength = input.marketState === "neutral"
-    ? (input.language === "tr" ? "Aktif durum yok" : "No active state")
+  const strength = input.marketState === "low_participation"
+    ? (input.language === "tr" ? "Aktif taraf yok" : "Neither side active")
     : input.stateScore === null
     ? (input.language === "tr" ? "Güç ölçülüyor" : "Strength updating")
     : (input.language === "tr"

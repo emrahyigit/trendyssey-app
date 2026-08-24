@@ -356,7 +356,7 @@ actor AnalysisInsightsService {
                             confirmationScore: row.state_score,
                             relativeStrengthScore: nil,
                             trendScore: nil,
-                            trendEntry: row.state == .bullishConfirmation && row.state_score >= 75,
+                            trendEntry: row.state == .buyerTakeover && row.state_score >= MarketStateSnapshot.aPlusMinimumScore,
                             marketState: row.state,
                             marketStateScore: row.state_score,
                             marketStateChange: row.state_score_change,

@@ -14,17 +14,24 @@ struct TrendysseyApp: App {
         if UserDefaults.standard.string(forKey: JourneyModel.storageKey) != JourneyModel.emaCross.rawValue {
             UserDefaults.standard.set(JourneyModel.emaCross.rawValue, forKey: JourneyModel.storageKey)
         }
-        // The retired momentum state would otherwise sit in stored alert
-        // selections forever and be rejected by the server on every sync.
-        // Drop it and leave the rest of the user's choices untouched.
+        // Stored alert selections speak the retired vocabulary. Map them onto
+        // the control cycle so a saved choice keeps meaning what it meant, and
+        // drop anything with no successor.
         let notificationKey = "notificationMarketStates"
+        let renamedStates = [
+            "selling_dominant": "seller_dominance",
+            "breakdown_risk": "seller_dominance",
+            "bounce_attempt": "buyer_takeover",
+            "bullish_confirmation": "buyer_takeover",
+            "neutral": "balanced"
+        ]
         if let stored = UserDefaults.standard.string(forKey: notificationKey) {
             let selected = stored.split(separator: ",").map(String.init)
-            if selected.contains("bullish_momentum") {
-                UserDefaults.standard.set(
-                    selected.filter { $0 != "bullish_momentum" }.joined(separator: ","),
-                    forKey: notificationKey
-                )
+            let mapped = selected.compactMap { renamedStates[$0] ?? ($0.isEmpty ? nil : $0) }
+            let known = mapped.filter { MarketStateKind(rawValue: $0) != nil }
+            let migrated = Array(Set(known)).sorted()
+            if migrated != selected.sorted() {
+                UserDefaults.standard.set(migrated.joined(separator: ","), forKey: notificationKey)
             }
         }
     }

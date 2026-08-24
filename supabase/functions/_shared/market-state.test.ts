@@ -51,7 +51,28 @@ function baseline(count = 150): MarketCandle[] {
   });
 }
 
-Deno.test("efficient selling reads as dominant or breakdown risk", () => {
+/** Every metric the classifier reads, at a deliberately inert midpoint. */
+function inertMetrics(overrides: Record<string, number> = {}) {
+  return {
+    sellerPressure: 20,
+    buyerPressure: 20,
+    sellerEfficiency: 20,
+    buyerEfficiency: 20,
+    downsideResponse: 20,
+    upsideResponse: 20,
+    buySideAbsorption: 10,
+    sellSideAbsorption: 10,
+    sellerEfficiencyTrend: 0,
+    buyerEfficiencyTrend: 0,
+    sellerPressureTrend: 0,
+    buyerPressureTrend: 0,
+    bullishConfirmation: 0,
+    bearishConfirmation: 0,
+    ...overrides,
+  };
+}
+
+Deno.test("efficient selling reads as seller dominance", () => {
   const candles = baseline();
   let close = candles.at(-1)!.close;
   for (let offset = 0; offset < 8; offset += 1) {
@@ -66,13 +87,55 @@ Deno.test("efficient selling reads as dominant or breakdown risk", () => {
   }
   const result = marketStateObservation(candles, "4h");
   assert(result);
-  assert(result.sellingPressure >= 70);
+  assert(result.sellerPressure >= 70);
   assert(result.downsideResponse >= 70);
-  assert(result.sellerEfficiency >= 50);
-  assert(["selling_dominant", "breakdown_risk"].includes(result.state));
+  assertEquals(result.state, "seller_dominance");
 });
 
-Deno.test("heavy selling with price holding raises absorption above efficient-selling case", () => {
+Deno.test("efficient buying reads as buyer dominance", () => {
+  const candles = baseline();
+  let close = candles.at(-1)!.close;
+  for (let offset = 0; offset < 8; offset += 1) {
+    close += 0.9;
+    candles.push(candle(candles.length, close, {
+      open: close - 0.65,
+      high: close + 0.25,
+      low: close - 0.8,
+      quote: 2_400_000,
+      buyRatio: 0.75,
+    }));
+  }
+  const result = marketStateObservation(candles, "4h");
+  assert(result);
+  assert(result.buyerPressure >= 70);
+  assert(result.upsideResponse >= 70);
+  assertEquals(result.state, "buyer_dominance");
+});
+
+Deno.test("both sides can press hard at once", () => {
+  // Share of volume is a complement, so a share-based pair could never do
+  // this. Intensity against each side's own baseline can.
+  const candles = baseline();
+  let close = candles.at(-1)!.close;
+  for (let offset = 0; offset < 8; offset += 1) {
+    close += offset % 2 === 0 ? -0.15 : 0.15;
+    candles.push(candle(candles.length, close, {
+      open: close - 0.1,
+      high: close + 1.6,
+      low: close - 1.6,
+      quote: 6_000_000,
+      buyRatio: 0.5,
+    }));
+  }
+  const result = marketStateObservation(candles, "4h");
+  assert(result);
+  assert(
+    result.sellerPressure >= 60 && result.buyerPressure >= 60,
+    `expected both sides high, got seller=${result.sellerPressure} buyer=${result.buyerPressure}`,
+  );
+});
+
+Deno.test("heavy selling with price holding raises buy-side absorption", () => {
   const efficient = baseline();
   let falling = efficient.at(-1)!.close;
   for (let offset = 0; offset < 8; offset += 1) {
@@ -100,10 +163,9 @@ Deno.test("heavy selling with price holding raises absorption above efficient-se
 
   const efficientResult = marketStateObservation(efficient, "4h")!;
   const absorbedResult = marketStateObservation(absorbed, "4h")!;
-  assert(absorbedResult.sellingPressure >= 70);
+  assert(absorbedResult.sellerPressure >= 70);
   assert(absorbedResult.sellerEfficiency < efficientResult.sellerEfficiency);
-  assert(absorbedResult.priceResilience > efficientResult.priceResilience);
-  assert(absorbedResult.absorption > efficientResult.absorption);
+  assert(absorbedResult.buySideAbsorption > efficientResult.buySideAbsorption);
 });
 
 Deno.test("same closed candles produce an identical observation", () => {
@@ -113,12 +175,6 @@ Deno.test("same closed candles produce an identical observation", () => {
   assertEquals(first, second);
 });
 
-Deno.test("neutral has no state strength", () => {
-  const result = marketStateObservation(baseline(170), "4h");
-  assert(result);
-  if (result.state === "neutral") assertEquals(result.stateScore, 0);
-});
-
 Deno.test("forming candle is outside the engine contract", () => {
   // The engine is deterministic and has no wall-clock dependency. Closed-only
   // filtering belongs to scan-market; this test locks the scoring version and
@@ -126,7 +182,7 @@ Deno.test("forming candle is outside the engine contract", () => {
   const candles = baseline(170);
   const result = marketStateObservation(candles, "4h")!;
   assertEquals(result.candleCloseTime, candles.at(-1)!.closeTime);
-  assertEquals(result.scoringVersion, "market-state-v4-reversal");
+  assertEquals(result.scoringVersion, "market-state-v5.2-control");
 });
 
 Deno.test("market-state window adapts to every supported timeframe", () => {
@@ -142,49 +198,186 @@ Deno.test("market-state window adapts to every supported timeframe", () => {
   }
 });
 
-Deno.test("seller impact fading alone cannot promote weak context to confirmation", () => {
-  const metrics = {
-    sellingPressure: 54,
-    downsideResponse: 17,
-    sellerEfficiency: 9,
-    efficiencyChange: -4,
-    absorption: 12,
-    priceResilience: 45,
-    bounceReadiness: 10,
-    confirmation: 76,
-  };
-
+Deno.test("absorption gives way once the other side has moved price", () => {
+  // Heavy selling, sellers getting nowhere, buyers already 90 on the response:
+  // a stalemate this is not, whatever the absorption score says.
+  const metrics = inertMetrics({
+    sellerPressure: 99,
+    sellerEfficiency: 5,
+    buySideAbsorption: 80,
+    buyerPressure: 95,
+    buyerEfficiency: 81,
+    upsideResponse: 90,
+  });
   assertEquals(
-    classifyMarketState(metrics, "seller_impact_fading"),
-    { state: "neutral", stateScore: 0 },
+    classifyMarketState(metrics, "buy_side_absorption").state,
+    "buyer_dominance",
   );
+
+  // With price pinned instead, the same absorption reading still holds.
+  const pinned = { ...metrics, upsideResponse: 20, buyerEfficiency: 20 };
   assertEquals(
-    classifyMarketState(metrics, "buy_side_absorption"),
-    { state: "bullish_confirmation", stateScore: 76 },
+    classifyMarketState(pinned, "buy_side_absorption").state,
+    "buy_side_absorption",
   );
 });
 
-// A coin already trending up has nothing left to reverse. Strong confirmation
-// on its own — no absorption context, no bounce readiness — must stay neutral
-// rather than earning a continuation state of its own.
-Deno.test("pure continuation without reversal context stays neutral", () => {
-  const metrics = {
-    sellingPressure: 56,
-    downsideResponse: 0,
-    sellerEfficiency: 0,
-    efficiencyChange: -2,
-    absorption: 15,
-    priceResilience: 56,
-    bounceReadiness: 11,
-    confirmation: 78,
-  };
-
-  assertEquals(
-    classifyMarketState(metrics, "neutral"),
-    { state: "neutral", stateScore: 0 },
+Deno.test("readiness reads location and coiling, not the absorption beside it", () => {
+  // A sell-off that then goes quiet and tightens right on its low: absorption
+  // has nothing left to feed on, but the ground for a turn is exactly here.
+  const coiled = baseline();
+  let close = coiled.at(-1)!.close;
+  for (let offset = 0; offset < 8; offset += 1) {
+    close -= 0.9;
+    coiled.push(candle(coiled.length, close, {
+      open: close + 0.65,
+      low: close - 0.25,
+      quote: 2_400_000,
+      buyRatio: 0.25,
+    }));
+  }
+  for (let offset = 0; offset < 6; offset += 1) {
+    coiled.push(candle(coiled.length, close + 0.02, {
+      open: close,
+      high: close + 0.08,
+      low: close - 0.30,
+      quote: 400_000,
+      buyRatio: 0.5,
+    }));
+  }
+  const settled = marketStateObservation(coiled, "4h")!;
+  assert(
+    settled.bounceReadiness > settled.buySideAbsorption,
+    `readiness ${settled.bounceReadiness} should outlive absorption ${settled.buySideAbsorption}`,
   );
+
+  // Mid-range drift gives neither side a floor to turn from.
+  const drifting = marketStateObservation(baseline(170), "4h")!;
+  assert(drifting.bounceReadiness < 60);
+});
+
+Deno.test("an empty market is low participation, not balanced", () => {
   assertEquals(
-    classifyMarketState(metrics, "bullish_confirmation"),
-    { state: "neutral", stateScore: 0 },
+    classifyMarketState(inertMetrics()),
+    { state: "low_participation", stateScore: 20 },
+  );
+});
+
+Deno.test("an active market with no clear claim is balanced, not neutral", () => {
+  const metrics = inertMetrics({ sellerPressure: 58, buyerPressure: 54 });
+  assertEquals(
+    classifyMarketState(metrics),
+    { state: "balanced", stateScore: 58 },
+  );
+});
+
+Deno.test("selling that stops landing reads as impact fading", () => {
+  const metrics = inertMetrics({
+    sellerPressure: 68,
+    sellerEfficiency: 30,
+    sellerEfficiencyTrend: -18,
+    downsideResponse: 25,
+  });
+  assertEquals(
+    classifyMarketState(metrics, "seller_dominance"),
+    { state: "seller_impact_fading", stateScore: 70 },
+  );
+});
+
+Deno.test("buying that stops landing mirrors it", () => {
+  const metrics = inertMetrics({
+    buyerPressure: 68,
+    buyerEfficiency: 30,
+    buyerEfficiencyTrend: -18,
+    upsideResponse: 25,
+  });
+  assertEquals(
+    classifyMarketState(metrics, "buyer_dominance"),
+    { state: "buyer_impact_fading", stateScore: 70 },
+  );
+});
+
+Deno.test("intensity dying after a sell-off reads as seller exhaustion", () => {
+  const metrics = inertMetrics({
+    sellerPressure: 30,
+    sellerPressureTrend: -25,
+    downsideResponse: 20,
+  });
+  assertEquals(
+    classifyMarketState(metrics, "seller_impact_fading"),
+    { state: "seller_exhaustion", stateScore: 70 },
+  );
+  // Without a preceding sell-off there is nothing to be exhausted from.
+  assertEquals(
+    classifyMarketState(metrics, "buyer_dominance").state,
+    "low_participation",
+  );
+});
+
+Deno.test("control changing hands outranks the absorption it grew out of", () => {
+  const metrics = inertMetrics({
+    sellerPressure: 62,
+    sellerEfficiency: 30,
+    sellerEfficiencyTrend: -12,
+    buySideAbsorption: 70,
+    buyerEfficiency: 62,
+    buyerEfficiencyTrend: 14,
+    upsideResponse: 55,
+    bullishConfirmation: 70,
+  });
+  assertEquals(
+    classifyMarketState(metrics, "buy_side_absorption"),
+    { state: "buyer_takeover", stateScore: 70 },
+  );
+});
+
+Deno.test("a takeover needs closed-candle evidence, not just a rising trend", () => {
+  const metrics = inertMetrics({
+    sellerPressure: 62,
+    sellerEfficiency: 30,
+    sellerEfficiencyTrend: -12,
+    buySideAbsorption: 70,
+    buyerEfficiency: 62,
+    buyerEfficiencyTrend: 14,
+    upsideResponse: 55,
+    bullishConfirmation: 20,
+  });
+  assertEquals(
+    classifyMarketState(metrics, "buy_side_absorption").state,
+    "buy_side_absorption",
+  );
+});
+
+Deno.test("sellers retaking control after a rally mirrors the buyer path", () => {
+  const metrics = inertMetrics({
+    buyerPressure: 62,
+    buyerEfficiency: 30,
+    buyerEfficiencyTrend: -12,
+    sellSideAbsorption: 70,
+    sellerEfficiency: 62,
+    sellerEfficiencyTrend: 14,
+    downsideResponse: 55,
+    bearishConfirmation: 70,
+  });
+  assertEquals(
+    classifyMarketState(metrics, "sell_side_absorption"),
+    { state: "seller_takeover", stateScore: 70 },
+  );
+});
+
+Deno.test("absorption holds through a weaker reading once it is established", () => {
+  const metrics = inertMetrics({
+    sellerPressure: 60,
+    sellerEfficiency: 35,
+    buySideAbsorption: 58,
+  });
+  assertEquals(
+    classifyMarketState(metrics, "buy_side_absorption"),
+    { state: "buy_side_absorption", stateScore: 58 },
+  );
+  // The same reading is not strong enough to declare absorption from scratch.
+  assertEquals(
+    classifyMarketState(metrics, "balanced").state,
+    "balanced",
   );
 });

@@ -39,7 +39,7 @@ Deno.test("body carries market state and 24h volume, nothing else", () => {
     direction: "bullish",
     language: "tr",
   });
-  assertEqual(title, "SOL · Alıcı absorpsiyonu", "title");
+  assertEqual(title, "SOL · Alıcılar satışı topluyor", "title");
   assertEqual(body, "Güç 74/100 · Değişim +6 · 24s hacim $1.23B", "body");
   if (/risk/i.test(body)) throw new Error("risk must not appear in the body");
   if (/Rejim|Hazırlık|Kalite|Teyit/.test(body)) {
@@ -89,7 +89,7 @@ Deno.test("the title names the current state", () => {
   const { title } = composeNotification({
     baseAsset: "AVAX",
     status: "breakout_detected",
-    marketState: "breakdown_risk",
+    marketState: "seller_takeover",
     stateScore: 82,
     stateScoreChange: 9,
     quoteVolume24h: 42_000_000,
@@ -97,5 +97,5 @@ Deno.test("the title names the current state", () => {
     direction: "bearish",
     language: "en",
   });
-  assertEqual(title, "AVAX · Breakdown risk", "state title");
+  assertEqual(title, "AVAX · Sellers taking control", "state title");
 });

@@ -1,27 +1,53 @@
 import SwiftUI
 
-extension MarketStateKind {
+extension MarketControlSide {
     var color: Color {
         switch self {
-        case .neutral: TrendysseyColor.secondaryText
-        case .sellingDominant: TrendysseyColor.warning
-        case .sellerImpactFading: TrendysseyColor.accent
-        case .buySideAbsorption: TrendysseyColor.accent
-        case .bounceAttempt: TrendysseyColor.positive
-        case .bullishConfirmation: TrendysseyColor.positive
-        case .breakdownRisk: TrendysseyColor.negative
+        case .sellers: TrendysseyColor.negative
+        case .buyers: TrendysseyColor.positive
+        case .contested: TrendysseyColor.secondaryText
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .sellers: L10n.text("Sellers", "Satıcılar")
+        case .buyers: L10n.text("Buyers", "Alıcılar")
+        case .contested: L10n.text("Neither", "Hiçbiri")
+        }
+    }
+}
+
+extension MarketStateKind {
+    /// Coloured by who the state favours, not by who is currently pressing:
+    /// sellers absorbing a rally is a warning, not a green light.
+    var color: Color {
+        switch self {
+        case .sellerDominance, .sellerTakeover, .sellSideAbsorption, .buyerExhaustion:
+            TrendysseyColor.negative
+        case .buyerDominance, .buyerTakeover, .buySideAbsorption, .sellerExhaustion:
+            TrendysseyColor.positive
+        case .sellerImpactFading, .buyerImpactFading:
+            TrendysseyColor.accent
+        case .balanced, .lowParticipation:
+            TrendysseyColor.secondaryText
         }
     }
 
     var systemImage: String {
         switch self {
-        case .neutral: "equal.circle"
-        case .sellingDominant: "arrow.down.circle.fill"
+        case .sellerDominance: "arrow.down.circle.fill"
         case .sellerImpactFading: "waveform.path.ecg"
         case .buySideAbsorption: "shield.lefthalf.filled"
-        case .bounceAttempt: "arrow.turn.up.right"
-        case .bullishConfirmation: "checkmark.circle.fill"
-        case .breakdownRisk: "exclamationmark.triangle.fill"
+        case .sellerExhaustion: "battery.25"
+        case .buyerTakeover: "arrow.turn.up.right"
+        case .buyerDominance: "arrow.up.circle.fill"
+        case .buyerImpactFading: "waveform.path.ecg"
+        case .sellSideAbsorption: "shield.righthalf.filled"
+        case .buyerExhaustion: "battery.25"
+        case .sellerTakeover: "arrow.turn.down.right"
+        case .balanced: "arrow.left.arrow.right"
+        case .lowParticipation: "moon.zzz"
         }
     }
 }
@@ -30,7 +56,7 @@ struct MarketStateChip: View {
     let snapshot: MarketStateSnapshot
 
     var body: some View {
-        Label(snapshot.state.title, systemImage: snapshot.state.systemImage)
+        Label(snapshot.headline, systemImage: snapshot.state.systemImage)
             .font(.caption2.bold())
             .foregroundStyle(snapshot.state.color)
             .lineLimit(1)
@@ -39,70 +65,227 @@ struct MarketStateChip: View {
             .padding(.vertical, 5)
             .background(snapshot.state.color.opacity(0.12), in: Capsule())
             .accessibilityLabel(snapshot.hasActiveState
-                ? "\(snapshot.state.title), \(snapshot.stateScore) / 100"
-                : L10n.text("Neutral, no active state", "Nötr, aktif durum yok"))
+                ? "\(snapshot.headline), \(snapshot.stateScore) / 100"
+                : L10n.text("Market is quiet", "Piyasa durgun"))
+    }
+}
+
+/// The contest as one row: both sides of a dimension on a shared 0-100 scale,
+/// meeting in the middle so the longer bar is the side winning that dimension.
+private struct ContestRow: View {
+    let pair: MarketMetricPair
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            // Each side's number sits on its own side of the title, matching
+            // the bar underneath. Reading them both from the right, as they
+            // were, fought the geometry they describe.
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                HStack(spacing: 4) {
+                    Text("\(pair.sellerValue)")
+                        .font(.caption.bold()).monospacedDigit()
+                        .foregroundStyle(TrendysseyColor.negative)
+                    deltaBadge(pair.sellerChange, side: .sellers)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Text(pair.title)
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                    .layoutPriority(1)
+
+                HStack(spacing: 4) {
+                    deltaBadge(pair.buyerChange, side: .buyers)
+                    Text("\(pair.buyerValue)")
+                        .font(.caption.bold()).monospacedDigit()
+                        .foregroundStyle(TrendysseyColor.positive)
+                }
+                .frame(maxWidth: .infinity, alignment: .trailing)
+            }
+            GeometryReader { proxy in
+                let half = proxy.size.width / 2
+                ZStack {
+                    Capsule().fill(TrendysseyColor.border)
+                    HStack(spacing: 1) {
+                        HStack(spacing: 0) {
+                            Spacer(minLength: 0)
+                            Capsule()
+                                .fill(TrendysseyColor.negative)
+                                .frame(width: max(2, half * CGFloat(pair.sellerValue) / 100))
+                        }
+                        .frame(width: half)
+                        HStack(spacing: 0) {
+                            Capsule()
+                                .fill(TrendysseyColor.positive)
+                                .frame(width: max(2, half * CGFloat(pair.buyerValue) / 100))
+                            Spacer(minLength: 0)
+                        }
+                        .frame(width: half)
+                    }
+                }
+            }
+            .frame(height: 5)
+            Text(explanation)
+                .font(.caption2)
+                .foregroundStyle(TrendysseyColor.secondaryText)
+                .lineSpacing(2)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+            "\(pair.title): \(L10n.text("sellers", "satıcılar")) \(pair.sellerValue)\(spoken(pair.sellerChange)), \(L10n.text("buyers", "alıcılar")) \(pair.buyerValue)\(spoken(pair.buyerChange))"
+        )
+    }
+
+    /// Movement since the previous close. A metric that did not move needs no
+    /// badge — the level already says where it stands — and a first reading has
+    /// nothing to compare against, so both render as nothing.
+    @ViewBuilder private func deltaBadge(_ change: Int?, side: MarketControlSide) -> some View {
+        if let change, change != 0 {
+            // Coloured by whether the move helps the reader, who can only be
+            // long: buyers gaining is green, sellers gaining is red. Every
+            // column argues for its own side, so this holds on all six rows.
+            let helpsReader = side == .buyers ? change > 0 : change < 0
+            let tint = helpsReader ? TrendysseyColor.positive : TrendysseyColor.negative
+            // A true minus sign rather than a hyphen, so it matches the weight
+            // of the plus beside it instead of reading as a stub.
+            Text(change > 0 ? "+\(change)" : "\u{2212}\(abs(change))")
+                .font(.system(size: 9, weight: .bold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(tint)
+                .lineLimit(1)
+                .fixedSize()
+                .padding(.horizontal, 4)
+                .padding(.vertical, 2)
+                .background(tint.opacity(0.14), in: Capsule())
+        }
+    }
+
+    private func spoken(_ change: Int?) -> String {
+        guard let change, change != 0 else { return "" }
+        return change > 0
+            ? L10n.text(", up \(change)", ", \(change) arttı")
+            : L10n.text(", down \(abs(change))", ", \(abs(change)) azaldı")
+    }
+
+    private var explanation: String {
+        switch pair.id {
+        case "pressure":
+            switch pair.leader {
+            case .sellers: L10n.text(
+                "Sellers are swinging harder than buyers right now.",
+                "Şu anda satıcılar alıcılardan daha sert vuruyor."
+            )
+            case .buyers: L10n.text(
+                "Buyers are swinging harder than sellers right now.",
+                "Şu anda alıcılar satıcılardan daha sert vuruyor."
+            )
+            case .contested: L10n.text(
+                "Both sides are pressing with about the same force.",
+                "İki taraf da yaklaşık aynı güçle bastırıyor."
+            )
+            }
+        case "efficiency":
+            switch pair.leader {
+            case .sellers: L10n.text(
+                "Sellers get more price movement per unit of flow than buyers do.",
+                "Satıcılar, harcadıkları akış başına alıcılardan daha fazla fiyat hareketi alıyor."
+            )
+            case .buyers: L10n.text(
+                "Buyers get more price movement per unit of flow than sellers do.",
+                "Alıcılar, harcadıkları akış başına satıcılardan daha fazla fiyat hareketi alıyor."
+            )
+            case .contested: L10n.text(
+                "Neither side converts its flow into price better than the other.",
+                "Hiçbir taraf akışını fiyata diğerinden daha iyi çeviremiyor."
+            )
+            }
+        case "response":
+            switch pair.leader {
+            case .sellers: L10n.text(
+                "Price has travelled further down than up over the window.",
+                "Fiyat, pencere boyunca aşağı yönde yukarıdan daha çok yol aldı."
+            )
+            case .buyers: L10n.text(
+                "Price has travelled further up than down over the window.",
+                "Fiyat, pencere boyunca yukarı yönde aşağıdan daha çok yol aldı."
+            )
+            case .contested: L10n.text(
+                "Price has gone nowhere in particular; the two directions cancel out.",
+                "Fiyat belirli bir yere gitmedi; iki yön birbirini götürüyor."
+            )
+            }
+        case "absorption":
+            switch pair.leader {
+            case .sellers: L10n.text(
+                "Sellers are quietly selling into the buying.",
+                "Satıcılar sessizce alımın içine satıyor."
+            )
+            case .buyers: L10n.text(
+                "Buyers are quietly taking the other side of the selling.",
+                "Alıcılar sessizce satışın karşı tarafını alıyor."
+            )
+            case .contested: L10n.text(
+                "Neither side is absorbing the other in any meaningful amount.",
+                "Hiçbir taraf diğerini anlamlı ölçüde emmiyor."
+            )
+            }
+        case "readiness":
+            switch pair.leader {
+            case .sellers: L10n.text(
+                "Price is coiled nearer its high, where a turn down would start.",
+                "Fiyat, aşağı dönüşün başlayacağı tepeye yakın bir yerde sıkışmış."
+            )
+            case .buyers: L10n.text(
+                "Price is coiled nearer its low, where a turn up would start.",
+                "Fiyat, yukarı dönüşün başlayacağı dibe yakın bir yerde sıkışmış."
+            )
+            case .contested: L10n.text(
+                "Price is mid-range and still wide; neither turn has a floor yet.",
+                "Fiyat aralığın ortasında ve hâlâ geniş; iki dönüşün de henüz zemini yok."
+            )
+            }
+        case "resilience":
+            switch pair.leader {
+            case .sellers: L10n.text(
+                "Sellers held price down better than buyers held it up.",
+                "Satıcılar fiyatı aşağıda tutmayı, alıcıların yukarıda tutmasından daha iyi başardı."
+            )
+            case .buyers: L10n.text(
+                "Buyers held price up better than sellers held it down.",
+                "Alıcılar fiyatı yukarıda tutmayı, satıcıların aşağıda tutmasından daha iyi başardı."
+            )
+            case .contested: L10n.text(
+                "Both sides defended price about equally well.",
+                "İki taraf da fiyatı yaklaşık aynı ölçüde savundu."
+            )
+            }
+        default:
+            ""
+        }
     }
 }
 
 struct CurrentMarketStateCard: View {
     let snapshot: MarketStateSnapshot
 
-    private struct Metric: Identifiable {
-        let id: String
-        let title: String
-        let value: Int
-        let change: Int?
-    }
-
-    private var metrics: [Metric] {
-        [
-            Metric(id: "pressure", title: L10n.text("Selling pressure", "Satış baskısı"), value: snapshot.sellingPressure, change: snapshot.sellingPressureChange),
-            Metric(id: "efficiency", title: L10n.text("Seller efficiency", "Satıcı etkinliği"), value: snapshot.sellerEfficiency, change: snapshot.sellerEfficiencyChange),
-            Metric(id: "response", title: L10n.text("Downside response", "Aşağı yönlü tepki"), value: snapshot.downsideResponse, change: snapshot.downsideResponseChange),
-            Metric(id: "absorption", title: L10n.text("Buy-side absorption", "Alıcı absorpsiyonu"), value: snapshot.absorption, change: snapshot.absorptionChange),
-            Metric(id: "resilience", title: L10n.text("Price resilience", "Fiyat dayanıklılığı"), value: snapshot.priceResilience, change: snapshot.priceResilienceChange),
-            Metric(id: "readiness", title: L10n.text("Bounce readiness", "Tepki hazırlığı"), value: snapshot.bounceReadiness, change: snapshot.bounceReadinessChange),
-            Metric(id: "confirmation", title: L10n.text("Confirmation", "Teyit"), value: snapshot.confirmation, change: snapshot.confirmationChange)
-        ]
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 15) {
-            HStack(alignment: .top, spacing: 12) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(L10n.text("CURRENT MARKET STATE", "GÜNCEL PİYASA DURUMU"))
-                        .font(.caption2.bold())
-                        .foregroundStyle(TrendysseyColor.secondaryText)
-                    Label(snapshot.state.title, systemImage: snapshot.state.systemImage)
-                        .font(.title3.bold())
-                        .foregroundStyle(snapshot.state.color)
-                }
-                Spacer(minLength: 8)
-                if snapshot.hasActiveState {
-                    Text("\(snapshot.stateScore)")
-                        .font(.system(size: 34, weight: .bold, design: .rounded))
-                        .monospacedDigit()
-                        + Text(" / 100")
-                        .font(.caption)
-                        .foregroundColor(TrendysseyColor.secondaryText)
-                } else {
-                    Text(L10n.text("No active state", "Aktif durum yok"))
-                        .font(.subheadline.bold())
-                        .foregroundStyle(TrendysseyColor.secondaryText)
-                        .multilineTextAlignment(.trailing)
-                }
-            }
-            Text(overallSummary)
+            header
+            Text(snapshot.state.explanation)
                 .font(.caption)
                 .foregroundStyle(TrendysseyColor.secondaryText)
                 .lineSpacing(2)
             Divider()
-            ForEach(metrics) { metric in
-                metricRow(metric)
+            Text(L10n.text("WHO IS WINNING WHAT", "HANGİ BOYUTU KİM KAZANIYOR"))
+                .font(.caption2.bold())
+                .foregroundStyle(TrendysseyColor.secondaryText)
+            ForEach(snapshot.metricPairs) { pair in
+                ContestRow(pair: pair)
             }
             Text(L10n.text(
-                "Calculated from closed candles. This is a current statistical state, not a buy or sell instruction.",
-                "Kapanmış mumlardan hesaplanır. Bu güncel istatistiksel bir durumdur; alım veya satım talimatı değildir."
+                "Calculated from closed candles. This describes the current balance of buying and selling, not a buy or sell instruction.",
+                "Kapanmış mumlardan hesaplanır. Bu, alım ve satımın güncel dengesini anlatır; alım veya satım talimatı değildir."
             ))
             .font(.caption2)
             .foregroundStyle(TrendysseyColor.secondaryText)
@@ -110,120 +293,72 @@ struct CurrentMarketStateCard: View {
         }
     }
 
-    private func metricRow(_ metric: Metric) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(metric.title).font(.caption.weight(.semibold))
-                Spacer()
-                Text("\(metric.value)")
-                    .font(.caption.bold())
-                    .monospacedDigit()
-                if let change = metric.change {
-                    Text(signed(change))
-                        .font(.system(size: 9, weight: .bold, design: .rounded))
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(L10n.text("MARKET CONTROL", "PİYASA KONTROLÜ"))
+                        .font(.caption2.bold())
+                        .foregroundStyle(TrendysseyColor.secondaryText)
+                    Label(snapshot.headline, systemImage: snapshot.state.systemImage)
+                        .font(.subheadline.bold())
+                        .foregroundStyle(snapshot.state.color)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.8)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 8)
+                if snapshot.hasActiveState {
+                    Text("\(snapshot.stateScore)")
+                        .font(.system(size: 30, weight: .bold, design: .rounded))
                         .monospacedDigit()
-                        .foregroundStyle(changeBadgeColor(change))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 3)
-                        .background(changeBadgeColor(change).opacity(0.14), in: Capsule())
-                        .accessibilityLabel(L10n.text("Change \(signed(change))", "Değişim \(signed(change))"))
+                        + Text(" / 100")
+                        .font(.caption)
+                        .foregroundColor(TrendysseyColor.secondaryText)
                 }
             }
-            GeometryReader { proxy in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(TrendysseyColor.border)
-                    Capsule()
-                        .fill(metricColor(metric))
-                        .frame(width: max(3, proxy.size.width * CGFloat(metric.value) / 100))
-                }
+            // Two facts, not one sentence: who holds control, and what is
+            // happening to their grip. "SELLERS · WEAKENING" reads faster than
+            // the state name it is built from.
+            HStack(spacing: 8) {
+                factBox(
+                    caption: L10n.text("CONTROL", "KONTROL"),
+                    value: snapshot.state.controlSide == .contested
+                        ? L10n.text("SPLIT", "PAYLAŞILMIŞ")
+                        : snapshot.state.controlSide.label.uppercased(),
+                    tint: snapshot.state.controlSide.color,
+                    icon: snapshot.state.controlSide == .sellers
+                        ? "arrow.down"
+                        : snapshot.state.controlSide == .buyers ? "arrow.up" : "arrow.left.arrow.right"
+                )
+                factBox(
+                    caption: L10n.text("PHASE", "DURUM"),
+                    value: snapshot.state.stage.label,
+                    tint: snapshot.state.color,
+                    icon: snapshot.state.systemImage
+                )
             }
-            .frame(height: 5)
-            Text(metricExplanation(metric))
-                .font(.caption2)
+        }
+    }
+
+    private func factBox(caption: String, value: String, tint: Color, icon: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(caption)
+                .font(.system(size: 9, weight: .bold))
                 .foregroundStyle(TrendysseyColor.secondaryText)
-                .lineSpacing(2)
+            Label(value, systemImage: icon)
+                .font(.footnote.bold())
+                .foregroundStyle(tint)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
         }
-    }
-
-    private var overallSummary: String {
-        switch snapshot.state {
-        case .neutral:
-            L10n.text("Buyers and sellers are balanced; there is no clear market advantage right now.", "Alıcılar ve satıcılar dengeli; şu anda belirgin bir piyasa üstünlüğü yok.")
-        case .sellingDominant:
-            L10n.text("Sellers currently have the stronger influence on price.", "Şu anda fiyat üzerinde satıcıların etkisi daha güçlü.")
-        case .sellerImpactFading:
-            L10n.text("Selling continues, but it is becoming less effective at pushing price down.", "Satış sürüyor ancak fiyatı aşağı itme gücü zayıflıyor.")
-        case .buySideAbsorption:
-            L10n.text("Buyers are meeting the incoming supply and limiting price damage.", "Alıcılar gelen satışı karşılıyor ve fiyat üzerindeki hasarı sınırlıyor.")
-        case .bounceAttempt:
-            L10n.text("An upward response has started, but it still needs stronger confirmation.", "Yukarı yönlü bir tepki başladı ancak daha güçlü teyide ihtiyaç duyuyor.")
-        case .bullishConfirmation:
-            L10n.text("Buyer control is strengthening and the upward move is gaining confirmation.", "Alıcı kontrolü güçleniyor ve yukarı yönlü hareket teyit kazanıyor.")
-        case .breakdownRisk:
-            L10n.text("Selling remains effective, so the risk of further downside is elevated.", "Satış etkili kalıyor; bu nedenle aşağı yönün devam riski yüksek.")
-        }
-    }
-
-    private func metricExplanation(_ metric: Metric) -> String {
-        let level = metric.value < 35
-            ? ("low", "düşük")
-            : metric.value < 65 ? ("moderate", "orta") : ("high", "yüksek")
-        let subject: (String, String)
-        let rising: (String, String)
-        let falling: (String, String)
-        switch metric.id {
-        case "pressure":
-            subject = ("Selling pressure", "Satış baskısı")
-            rising = ("strengthening", "güçleniyor")
-            falling = ("easing", "hafifliyor")
-        case "efficiency":
-            subject = ("Seller efficiency", "Satıcı etkinliği")
-            rising = ("strengthening", "güçleniyor")
-            falling = ("weakening", "zayıflıyor")
-        case "response":
-            subject = ("Downside response", "Aşağı yönlü tepki")
-            rising = ("intensifying", "şiddetleniyor")
-            falling = ("easing", "hafifliyor")
-        case "absorption":
-            subject = ("Buyer absorption", "Alıcı absorpsiyonu")
-            rising = ("strengthening", "güçleniyor")
-            falling = ("weakening", "zayıflıyor")
-        case "resilience":
-            subject = ("Price resilience", "Fiyat dayanıklılığı")
-            rising = ("improving", "iyileşiyor")
-            falling = ("weakening", "zayıflıyor")
-        case "readiness":
-            subject = ("Rebound readiness", "Tepki hazırlığı")
-            rising = ("improving", "iyileşiyor")
-            falling = ("losing strength", "güç kaybediyor")
-        case "confirmation":
-            subject = ("Upward confirmation", "Yukarı yönlü teyit")
-            rising = ("strengthening", "güçleniyor")
-            falling = ("fading", "zayıflıyor")
-        default:
-            subject = (metric.title, metric.title)
-            rising = ("rising", "artıyor")
-            falling = ("falling", "azalıyor")
-        }
-
-        guard let change = metric.change else {
-            return L10n.text(
-                "\(subject.0) is \(level.0).",
-                "\(subject.1) \(level.1)."
-            )
-        }
-        if change == 0 {
-            return L10n.text(
-                "\(subject.0) is \(level.0) and unchanged from the previous close.",
-                "\(subject.1) \(level.1) ve önceki kapanışla aynı."
-            )
-        }
-        let points = abs(change)
-        let movement = change > 0 ? rising : falling
-        return L10n.text(
-            "\(subject.0) is \(level.0) and \(movement.0) after a \(points)-point \(change > 0 ? "increase" : "decrease").",
-            "\(subject.1) \(level.1) ve \(points) puan \(change > 0 ? "artarak" : "azalarak") \(movement.1)."
-        )
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .background(tint.opacity(0.10), in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(tint.opacity(0.25), lineWidth: 0.5))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(caption): \(value)")
     }
 
     private func signed(_ value: Int) -> String { value > 0 ? "+\(value)" : "\(value)" }
@@ -232,14 +367,5 @@ struct CurrentMarketStateCard: View {
         if value > 0 { return TrendysseyColor.positive }
         if value < 0 { return TrendysseyColor.negative }
         return TrendysseyColor.warning
-    }
-
-    private func metricColor(_ metric: Metric) -> Color {
-        switch metric.id {
-        case "pressure", "response": metric.value >= 70 ? TrendysseyColor.negative : TrendysseyColor.warning
-        case "efficiency": metric.value >= 65 ? TrendysseyColor.negative : TrendysseyColor.accent
-        case "absorption", "resilience", "readiness", "confirmation": metric.value >= 65 ? TrendysseyColor.positive : TrendysseyColor.accent
-        default: TrendysseyColor.accent
-        }
     }
 }

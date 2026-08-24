@@ -10,7 +10,7 @@ struct SettingsView: View {
     @AppStorage("notificationsEnabled") private var notifications = false
     @AppStorage("preferredTimeframe") private var preferredTimeframe = "15m"
     @AppStorage(JourneyModel.storageKey) private var journeyModel = JourneyModel.emaCross.rawValue
-    @AppStorage("notificationMarketStates") private var notificationMarketStates = "neutral,selling_dominant,seller_impact_fading,buy_side_absorption,bounce_attempt,bullish_confirmation,breakdown_risk"
+    @AppStorage("notificationMarketStates") private var notificationMarketStates = "seller_dominance,seller_impact_fading,buy_side_absorption,seller_exhaustion,buyer_takeover,buyer_dominance,buyer_impact_fading,sell_side_absorption,buyer_exhaustion,seller_takeover"
     @AppStorage("notificationScope") private var notificationScope = "favorites"
     @AppStorage("notificationMinimumSuccessRate") private var notificationMinimumSuccessRate = 0
     @AppStorage("notificationMinimumRegimeScore") private var notificationMinimumRegimeScore = 0

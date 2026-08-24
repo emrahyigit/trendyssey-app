@@ -3,6 +3,37 @@ import Foundation
 actor MarketStateService {
     static let shared = MarketStateService()
 
+    /// Every metric carries a level and a close-to-close delta. Listing the
+    /// pairs together keeps the request and the model in step.
+    private static let metricColumns = [
+        "seller_pressure", "buyer_pressure",
+        "seller_efficiency", "buyer_efficiency",
+        "downside_response", "upside_response",
+        "buy_side_absorption", "sell_side_absorption",
+        "bullish_confirmation", "bearish_confirmation",
+        "bounce_readiness", "rollover_readiness",
+        "buyer_resilience", "seller_resilience"
+    ]
+
+    private static let selectColumns: String = ([
+        "state", "state_score", "previous_state_score", "state_score_change",
+        "seller_efficiency_trend", "buyer_efficiency_trend",
+        "seller_pressure_trend", "buyer_pressure_trend",
+        "state_since", "candle_close_time", "scoring_version"
+    ] + metricColumns.flatMap { [$0, "\($0)_change"] }
+      + ["symbols!inner(symbol)"]).joined(separator: ",")
+
+    /// Decoding an array of optionals still fails the whole array in Swift, so
+    /// tolerance has to be written explicitly: a row this build cannot read
+    /// becomes nil instead of throwing.
+    private struct TolerantRow: Decodable {
+        let row: Row?
+
+        init(from decoder: Decoder) throws {
+            row = try? Row(from: decoder)
+        }
+    }
+
     private struct Row: Decodable {
         struct Symbol: Decodable { let symbol: String }
 
@@ -10,21 +41,38 @@ actor MarketStateService {
         let state_score: Int
         let previous_state_score: Int?
         let state_score_change: Int?
-        let selling_pressure: Int
-        let selling_pressure_change: Int?
-        let downside_response: Int
-        let downside_response_change: Int?
+        let seller_pressure: Int
+        let seller_pressure_change: Int?
+        let buyer_pressure: Int
+        let buyer_pressure_change: Int?
         let seller_efficiency: Int
         let seller_efficiency_change: Int?
-        let efficiency_change: Int
-        let absorption: Int
-        let absorption_change: Int?
-        let price_resilience: Int
-        let price_resilience_change: Int?
+        let buyer_efficiency: Int
+        let buyer_efficiency_change: Int?
+        let downside_response: Int
+        let downside_response_change: Int?
+        let upside_response: Int
+        let upside_response_change: Int?
+        let buy_side_absorption: Int
+        let buy_side_absorption_change: Int?
+        let sell_side_absorption: Int
+        let sell_side_absorption_change: Int?
+        let bullish_confirmation: Int
+        let bullish_confirmation_change: Int?
+        let bearish_confirmation: Int
+        let bearish_confirmation_change: Int?
         let bounce_readiness: Int
         let bounce_readiness_change: Int?
-        let confirmation: Int
-        let confirmation_change: Int?
+        let rollover_readiness: Int
+        let rollover_readiness_change: Int?
+        let buyer_resilience: Int
+        let buyer_resilience_change: Int?
+        let seller_resilience: Int
+        let seller_resilience_change: Int?
+        let seller_efficiency_trend: Int
+        let buyer_efficiency_trend: Int
+        let seller_pressure_trend: Int
+        let buyer_pressure_trend: Int
         let state_since: Date
         let candle_close_time: Date
         let scoring_version: String
@@ -36,21 +84,38 @@ actor MarketStateService {
                 stateScore: state_score,
                 previousStateScore: previous_state_score,
                 stateScoreChange: state_score_change,
-                sellingPressure: selling_pressure,
-                sellingPressureChange: selling_pressure_change,
-                downsideResponse: downside_response,
-                downsideResponseChange: downside_response_change,
+                sellerPressure: seller_pressure,
+                sellerPressureChange: seller_pressure_change,
+                buyerPressure: buyer_pressure,
+                buyerPressureChange: buyer_pressure_change,
                 sellerEfficiency: seller_efficiency,
                 sellerEfficiencyChange: seller_efficiency_change,
-                efficiencyChange: efficiency_change,
-                absorption: absorption,
-                absorptionChange: absorption_change,
-                priceResilience: price_resilience,
-                priceResilienceChange: price_resilience_change,
+                buyerEfficiency: buyer_efficiency,
+                buyerEfficiencyChange: buyer_efficiency_change,
+                downsideResponse: downside_response,
+                downsideResponseChange: downside_response_change,
+                upsideResponse: upside_response,
+                upsideResponseChange: upside_response_change,
+                buySideAbsorption: buy_side_absorption,
+                buySideAbsorptionChange: buy_side_absorption_change,
+                sellSideAbsorption: sell_side_absorption,
+                sellSideAbsorptionChange: sell_side_absorption_change,
+                bullishConfirmation: bullish_confirmation,
+                bullishConfirmationChange: bullish_confirmation_change,
+                bearishConfirmation: bearish_confirmation,
+                bearishConfirmationChange: bearish_confirmation_change,
                 bounceReadiness: bounce_readiness,
                 bounceReadinessChange: bounce_readiness_change,
-                confirmation: confirmation,
-                confirmationChange: confirmation_change,
+                rolloverReadiness: rollover_readiness,
+                rolloverReadinessChange: rollover_readiness_change,
+                buyerResilience: buyer_resilience,
+                buyerResilienceChange: buyer_resilience_change,
+                sellerResilience: seller_resilience,
+                sellerResilienceChange: seller_resilience_change,
+                sellerEfficiencyTrend: seller_efficiency_trend,
+                buyerEfficiencyTrend: buyer_efficiency_trend,
+                sellerPressureTrend: seller_pressure_trend,
+                buyerPressureTrend: buyer_pressure_trend,
                 stateSince: state_since,
                 candleCloseTime: candle_close_time,
                 scoringVersion: scoring_version
@@ -64,7 +129,7 @@ actor MarketStateService {
             resolvingAgainstBaseURL: false
         )!
         components.queryItems = [
-            .init(name: "select", value: "state,state_score,previous_state_score,state_score_change,selling_pressure,selling_pressure_change,downside_response,downside_response_change,seller_efficiency,seller_efficiency_change,efficiency_change,absorption,absorption_change,price_resilience,price_resilience_change,bounce_readiness,bounce_readiness_change,confirmation,confirmation_change,state_since,candle_close_time,scoring_version,symbols!inner(symbol)"),
+            .init(name: "select", value: Self.selectColumns),
             .init(name: "timeframe", value: "eq.\(timeframe)"),
             .init(name: "limit", value: "1000")
         ]
@@ -79,9 +144,12 @@ actor MarketStateService {
         }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .marketStateISO8601
-        return Dictionary(uniqueKeysWithValues: try decoder.decode([Row].self, from: data).map {
-            ($0.symbols.symbol, $0.snapshot)
-        })
+        // A row whose state this build does not know is skipped rather than
+        // failing the whole list, so a server-side vocabulary change degrades
+        // to a missing coin instead of an empty screen.
+        return Dictionary(uniqueKeysWithValues: try decoder.decode([TolerantRow].self, from: data)
+            .compactMap(\.row)
+            .map { ($0.symbols.symbol, $0.snapshot) })
     }
 }
 

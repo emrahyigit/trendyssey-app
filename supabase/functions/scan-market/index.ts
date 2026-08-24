@@ -74,6 +74,47 @@ import {
   marketStateObservation,
 } from "../_shared/market-state.ts";
 
+/**
+ * Every metric that carries both a level and a close-to-close delta, as
+ * [column, observation key]. Pairs are listed together so an asymmetry in the
+ * schema is visible on sight.
+ */
+const MARKET_STATE_METRICS: Array<
+  [column: string, key: keyof MarketStateObservation]
+> = [
+  ["seller_pressure", "sellerPressure"],
+  ["buyer_pressure", "buyerPressure"],
+  ["seller_efficiency", "sellerEfficiency"],
+  ["buyer_efficiency", "buyerEfficiency"],
+  ["downside_response", "downsideResponse"],
+  ["upside_response", "upsideResponse"],
+  ["buy_side_absorption", "buySideAbsorption"],
+  ["sell_side_absorption", "sellSideAbsorption"],
+  ["bullish_confirmation", "bullishConfirmation"],
+  ["bearish_confirmation", "bearishConfirmation"],
+  ["bounce_readiness", "bounceReadiness"],
+  ["rollover_readiness", "rolloverReadiness"],
+  ["buyer_resilience", "buyerResilience"],
+  ["seller_resilience", "sellerResilience"],
+];
+
+const MARKET_STATE_SELECT = [
+  "state",
+  "state_since",
+  "state_score",
+  "previous_state_score",
+  "state_score_change",
+  "seller_efficiency_trend",
+  "buyer_efficiency_trend",
+  "seller_pressure_trend",
+  "buyer_pressure_trend",
+  "candle_close_time",
+  "scoring_version",
+  ...MARKET_STATE_METRICS.flatMap((
+    [column],
+  ) => [column, `${column}_change`]),
+].join(",");
+
 const supportedTimeframes = new Set(["15m", "1h", "4h", "1d"]);
 
 const timeframeMilliseconds: Record<string, number> = {
@@ -148,7 +189,7 @@ async function persistMarketState(
   const { data: previous, error: previousError } = await supabase
     .from("market_state_current")
     .select(
-      "state,state_since,state_score,previous_state_score,state_score_change,selling_pressure,selling_pressure_change,downside_response,downside_response_change,seller_efficiency,seller_efficiency_change,absorption,absorption_change,price_resilience,price_resilience_change,bounce_readiness,bounce_readiness_change,confirmation,confirmation_change,candle_close_time,scoring_version",
+      MARKET_STATE_SELECT,
     )
     .eq("symbol_id", symbolID)
     .eq("timeframe", timeframe)
@@ -189,11 +230,15 @@ async function persistMarketState(
     ? observation.stateScore - Number(previousStateScore)
     : null;
   const closeChange = (
-    current: number,
+    current: number | null,
     previousValue: unknown,
     storedChange: unknown,
-    rescoredPreviousValue: number | undefined,
+    rescoredPreviousValue: number | null | undefined,
   ) => {
+    // A withheld metric (price resilience under an untested market) has no
+    // delta to report, and neither does a close it cannot be compared against.
+    if (current === null) return null;
+    if (rescoredPreviousValue === null) return null;
     if (isNewScoringVersion) {
       return rescoredPreviousValue === undefined
         ? null
@@ -204,73 +249,39 @@ async function persistMarketState(
     if (storedChange === undefined || storedChange === null) return null;
     return Number(storedChange);
   };
-  const componentChanges = {
-    selling_pressure_change: closeChange(
-      observation.sellingPressure,
-      previous?.selling_pressure,
-      previous?.selling_pressure_change,
-      rescoredPrior?.sellingPressure,
-    ),
-    downside_response_change: closeChange(
-      observation.downsideResponse,
-      previous?.downside_response,
-      previous?.downside_response_change,
-      rescoredPrior?.downsideResponse,
-    ),
-    seller_efficiency_change: closeChange(
-      observation.sellerEfficiency,
-      previous?.seller_efficiency,
-      previous?.seller_efficiency_change,
-      rescoredPrior?.sellerEfficiency,
-    ),
-    absorption_change: closeChange(
-      observation.absorption,
-      previous?.absorption,
-      previous?.absorption_change,
-      rescoredPrior?.absorption,
-    ),
-    price_resilience_change: closeChange(
-      observation.priceResilience,
-      previous?.price_resilience,
-      previous?.price_resilience_change,
-      rescoredPrior?.priceResilience,
-    ),
-    bounce_readiness_change: closeChange(
-      observation.bounceReadiness,
-      previous?.bounce_readiness,
-      previous?.bounce_readiness_change,
-      rescoredPrior?.bounceReadiness,
-    ),
-    confirmation_change: closeChange(
-      observation.confirmation,
-      previous?.confirmation,
-      previous?.confirmation_change,
-      rescoredPrior?.confirmation,
-    ),
-  };
-  const stateSince = previous?.state === observation.state &&
-      previous?.state_since
-    ? String(previous.state_since)
-    : candleClose;
-  const scores = {
+  const componentChanges: Record<string, number | null> = {};
+  const scores: Record<string, unknown> = {
     state: observation.state,
     state_score: observation.stateScore,
     previous_state_score: previousStateScore,
     state_score_change: stateScoreChange,
-    selling_pressure: observation.sellingPressure,
-    downside_response: observation.downsideResponse,
-    seller_efficiency: observation.sellerEfficiency,
-    efficiency_change: observation.efficiencyChange,
-    absorption: observation.absorption,
-    price_resilience: observation.priceResilience,
-    bounce_readiness: observation.bounceReadiness,
-    confirmation: observation.confirmation,
-    ...componentChanges,
+    // Trends are already a slope over the recent series, so a close-to-close
+    // delta on top of them would describe the same movement twice.
+    seller_efficiency_trend: observation.sellerEfficiencyTrend,
+    buyer_efficiency_trend: observation.buyerEfficiencyTrend,
+    seller_pressure_trend: observation.sellerPressureTrend,
+    buyer_pressure_trend: observation.buyerPressureTrend,
     scoring_version: observation.scoringVersion,
     raw_features: observation.features,
     close_price: candles.at(-1)?.close ?? null,
     quote_volume_24h: quoteVolume24h,
   };
+  for (const [column, key] of MARKET_STATE_METRICS) {
+    const value = observation[key] as number | null;
+    scores[column] = value;
+    componentChanges[`${column}_change`] = closeChange(
+      value,
+      previous?.[column],
+      previous?.[`${column}_change`],
+      rescoredPrior?.[key] as number | null | undefined,
+    );
+  }
+  Object.assign(scores, componentChanges);
+
+  const stateSince = previous?.state === observation.state &&
+      previous?.state_since
+    ? String(previous.state_since)
+    : candleClose;
 
   const historyResult = await supabase.from("market_state_history").upsert({
     symbol_id: symbolID,

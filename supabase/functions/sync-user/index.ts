@@ -3,13 +3,18 @@ import { adminClient } from "../_shared/supabase.ts";
 
 const allowedTimeframes = new Set(["15m", "30m", "1h", "2h", "4h", "6h", "1d"]);
 const allowedMarketStates = new Set([
-  "neutral",
-  "selling_dominant",
+  "seller_dominance",
   "seller_impact_fading",
   "buy_side_absorption",
-  "bounce_attempt",
-  "bullish_confirmation",
-  "breakdown_risk",
+  "seller_exhaustion",
+  "buyer_takeover",
+  "buyer_dominance",
+  "buyer_impact_fading",
+  "sell_side_absorption",
+  "buyer_exhaustion",
+  "seller_takeover",
+  "balanced",
+  "low_participation",
 ]);
 
 type SyncBody = {

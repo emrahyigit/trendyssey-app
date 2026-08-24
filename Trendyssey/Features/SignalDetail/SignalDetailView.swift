@@ -54,13 +54,9 @@ struct SignalDetailView: View {
                             .font(.title2.bold())
                             .lineLimit(1)
                             .minimumScaleFactor(0.6)
-                        if liveAnalysisAllowed {
-                            Text(currentMarketState?.state.title ?? L10n.text("State updating", "Durum güncelleniyor"))
-                                .font(.subheadline)
-                                .foregroundStyle(currentMarketState?.state.color ?? TrendysseyColor.secondaryText)
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.65)
-                        } else {
+                        // The state belongs to the Market Control card below;
+                        // repeating it in the header only crowded the title.
+                        if !liveAnalysisAllowed {
                             Text(L10n.text("Low-volume coin", "Düşük hacimli coin"))
                                 .font(.subheadline).foregroundStyle(TrendysseyColor.secondaryText)
                         }

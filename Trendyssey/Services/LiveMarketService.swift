@@ -95,7 +95,9 @@ struct LiveMarketService: MarketService {
             scannedCount: signals.count,
             newSignalCount: signals.filter {
                 guard let state = $0.marketState else { return false }
-                return state.state != .neutral && state.stateSince >= recentBoundary
+                // A quiet market is not news; every other state is a live
+                // reading of the contest.
+                return state.hasActiveState && state.stateSince >= recentBoundary
             }.count,
             lowRiskCount: signals.filter { $0.marketState?.supportsAPlus == true }.count,
             signals: signals

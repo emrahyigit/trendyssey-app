@@ -2,23 +2,29 @@ import SwiftUI
 
 struct ScannerView: View {
     private enum SortOption: String, CaseIterable, Identifiable {
-        case state, absorption, pressure, volume, change
+        case state, buyAbsorption, sellAbsorption, sellerPressure, buyerPressure, volume, change
 
         var id: Self { self }
         var title: String {
             switch self {
             case .state: L10n.text("State strength", "Durum gücü")
-            case .absorption: L10n.text("Absorption", "Absorpsiyon")
-            case .pressure: L10n.text("Selling pressure", "Satış baskısı")
+            case .buyAbsorption: L10n.text("Buyers absorbing", "Alıcı absorpsiyonu")
+            case .sellAbsorption: L10n.text("Sellers absorbing", "Satıcı absorpsiyonu")
+            case .sellerPressure: L10n.text("Seller pressure", "Satıcı baskısı")
+            case .buyerPressure: L10n.text("Buyer pressure", "Alıcı baskısı")
             case .volume: L10n.text("24h volume", "24s hacim")
             case .change: L10n.text("24h change", "24s değişim")
             }
         }
     }
 
+    // Ordered as the cycle runs, so the picker reads as a sequence rather
+    // than an alphabetical list.
     private static let filterStates: [MarketStateKind] = [
-        .buySideAbsorption, .sellerImpactFading, .bounceAttempt,
-        .bullishConfirmation, .sellingDominant, .breakdownRisk, .neutral
+        .buyerTakeover, .sellerExhaustion, .buySideAbsorption, .sellerImpactFading,
+        .sellerDominance, .buyerDominance,
+        .buyerImpactFading, .sellSideAbsorption, .buyerExhaustion, .sellerTakeover,
+        .balanced, .lowParticipation
     ]
 
     @Environment(AppEnvironment.self) private var environment
@@ -34,8 +40,10 @@ struct ScannerView: View {
     private func score(for signal: MarketSignal, option: SortOption) -> Int {
         return switch option {
         case .state: signal.marketState?.stateScore ?? 0
-        case .absorption: signal.marketState?.absorption ?? 0
-        case .pressure: signal.marketState?.sellingPressure ?? 0
+        case .buyAbsorption: signal.marketState?.buySideAbsorption ?? 0
+        case .sellAbsorption: signal.marketState?.sellSideAbsorption ?? 0
+        case .sellerPressure: signal.marketState?.sellerPressure ?? 0
+        case .buyerPressure: signal.marketState?.buyerPressure ?? 0
         case .volume, .change: 0
         }
     }
@@ -49,7 +57,7 @@ struct ScannerView: View {
             return matchesQuery && matchesState
         }
         switch sortOption {
-        case .state, .absorption, .pressure:
+        case .state, .buyAbsorption, .sellAbsorption, .sellerPressure, .buyerPressure:
             return filtered.sorted {
                 let lhs = score(for: $0, option: sortOption)
                 let rhs = score(for: $1, option: sortOption)
@@ -87,7 +95,7 @@ struct ScannerView: View {
                     .listRowSeparator(.hidden)
                 }
                 ForEach(signals) { signal in
-                    Button { selectedSignal = signal } label: { SignalRow(signal: signal) }
+                    Button { selectedSignal = signal } label: { SignalRow(signal: signal, showsAPlus: false) }
                         .buttonStyle(.plain)
                         .listRowInsets(.init(top: 5, leading: 0, bottom: 5, trailing: 0))
                         .listRowBackground(TrendysseyColor.canvas)
