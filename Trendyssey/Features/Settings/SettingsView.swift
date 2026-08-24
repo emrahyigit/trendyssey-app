@@ -105,13 +105,13 @@ struct SettingsView: View {
                     if environment.subscriptionStore.isSubscribed { DailyBreakoutSimulatorView() }
                     else { SubscriptionView() }
                 } label: {
-                    proAnalysisLabel(L10n.text("Breakout scenario", "Kırılım senaryosu"))
+                    proAnalysisLabel(L10n.text("Behavior scenario", "Davranış senaryosu"))
                 }
                 NavigationLink {
                     if environment.subscriptionStore.isSubscribed { LiveTradesView() }
                     else { SubscriptionView() }
                 } label: {
-                    proAnalysisLabel(L10n.text("Auto trader", "Otomatik işlemler"))
+                    proAnalysisLabel(L10n.text("Behavior auto trader", "Davranış otomasyonu"))
                 }
             }
             Section(L10n.text("NOTIFICATIONS", "BİLDİRİMLER")) {

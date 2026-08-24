@@ -47,27 +47,20 @@ struct SignalDetailView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                HStack(spacing: 10) {
-                    SymbolMark(symbol: signal.baseSymbol, iconURL: signal.iconURL)
-                    VStack(alignment: .leading) {
-                        Text(signal.symbol)
-                            .font(.title2.bold())
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.6)
-                        // The state belongs to the Market Control card below;
-                        // repeating it in the header only crowded the title.
-                        if !liveAnalysisAllowed {
-                            Text(L10n.text("Low-volume coin", "Düşük hacimli coin"))
-                                .font(.subheadline).foregroundStyle(TrendysseyColor.secondaryText)
-                        }
-                    }
-                    Spacer(minLength: 4)
-                    binanceLink
-                    favorite
-                }
-                SurfaceCard { candleChart }
+                coinHero
                 if let state = currentMarketState {
                     SurfaceCard { CurrentMarketStateCard(snapshot: state) }
+                }
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Text(L10n.text("Price Structure", "Fiyat Yapısı"))
+                            .font(.headline)
+                        Spacer()
+                        Text(selectedTimeframe.title)
+                            .font(.caption2.bold())
+                            .foregroundStyle(TrendysseyColor.accent)
+                    }
+                    SurfaceCard { candleChart }
                 }
                 if let consensus = topPredictorConsensus {
                     SurfaceCard {
@@ -104,6 +97,66 @@ struct SignalDetailView: View {
                     try? await Task.sleep(for: .seconds(5))
                 }
             }
+    }
+
+    private var coinHero: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 11) {
+                SymbolMark(symbol: signal.baseSymbol, iconURL: signal.iconURL)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(signal.baseSymbol)
+                        .font(.title2.bold())
+                    Text(signal.name)
+                        .font(.caption)
+                        .foregroundStyle(TrendysseyColor.secondaryText)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 4)
+                binanceLink
+                favorite
+            }
+            HStack(alignment: .firstTextBaseline) {
+                Text("$\(signal.price.formatted(.number.precision(.fractionLength(2...6)).locale(L10n.locale)))")
+                    .font(.system(size: 30, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                    .minimumScaleFactor(0.7)
+                Spacer(minLength: 8)
+                Text(signal.change24h / 100, format: .percent.precision(.fractionLength(2)))
+                    .font(.subheadline.bold())
+                    .foregroundStyle(signal.change24h >= 0 ? TrendysseyColor.positive : TrendysseyColor.negative)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 6)
+                    .background(
+                        (signal.change24h >= 0 ? TrendysseyColor.positive : TrendysseyColor.negative).opacity(0.10),
+                        in: Capsule()
+                    )
+            }
+            HStack {
+                Label(
+                    L10n.text(
+                        "24h volume $\(signal.quoteVolume24h.formatted(.number.notation(.compactName).precision(.significantDigits(3)).locale(L10n.locale)))",
+                        "24s hacim $\(signal.quoteVolume24h.formatted(.number.notation(.compactName).precision(.significantDigits(3)).locale(L10n.locale)))"
+                    ),
+                    systemImage: "chart.bar.fill"
+                )
+                .font(.caption)
+                .foregroundStyle(TrendysseyColor.secondaryText)
+                Spacer()
+                if let reading = currentMarketState?.leadingBehavioralSignal {
+                    Label(
+                        reading.status == .confirmed
+                            ? L10n.text("Confirmed", "Doğrulandı")
+                            : L10n.text("Developing", "Gelişiyor"),
+                        systemImage: reading.status == .confirmed ? "checkmark.seal.fill" : "waveform.path.ecg"
+                    )
+                    .font(.caption.bold())
+                    .foregroundStyle(reading.direction.color)
+                }
+            }
+        }
+        .padding(16)
+        .background(TrendysseyColor.surface, in: RoundedRectangle(cornerRadius: 22))
+        .overlay(RoundedRectangle(cornerRadius: 22).stroke(TrendysseyColor.border, lineWidth: 1))
     }
 
     private var proTeaser: some View {

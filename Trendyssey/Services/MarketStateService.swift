@@ -19,7 +19,8 @@ actor MarketStateService {
         "state", "state_score", "previous_state_score", "state_score_change",
         "seller_efficiency_trend", "buyer_efficiency_trend",
         "seller_pressure_trend", "buyer_pressure_trend",
-        "state_since", "candle_close_time", "scoring_version"
+        "state_since", "candle_close_time", "scoring_version",
+        "market_context", "behavioral_scores", "behavioral_signals"
     ] + metricColumns.flatMap { [$0, "\($0)_change"] }
       + ["symbols!inner(symbol)"]).joined(separator: ",")
 
@@ -76,6 +77,9 @@ actor MarketStateService {
         let state_since: Date
         let candle_close_time: Date
         let scoring_version: String
+        let market_context: MarketBehaviorContext?
+        let behavioral_scores: BehavioralStateScores?
+        let behavioral_signals: [BehavioralSignal]?
         let symbols: Symbol
 
         var snapshot: MarketStateSnapshot {
@@ -112,6 +116,9 @@ actor MarketStateService {
                 buyerResilienceChange: buyer_resilience_change,
                 sellerResilience: seller_resilience,
                 sellerResilienceChange: seller_resilience_change,
+                context: market_context ?? .unavailable,
+                behavioralScores: behavioral_scores ?? .empty,
+                behavioralSignals: behavioral_signals ?? [],
                 sellerEfficiencyTrend: seller_efficiency_trend,
                 buyerEfficiencyTrend: buyer_efficiency_trend,
                 sellerPressureTrend: seller_pressure_trend,

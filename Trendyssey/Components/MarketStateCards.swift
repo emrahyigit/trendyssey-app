@@ -18,9 +18,25 @@ extension MarketControlSide {
     }
 }
 
+extension BehavioralDirection {
+    var color: Color {
+        switch self {
+        case .bullish: TrendysseyColor.positive
+        case .bearish: TrendysseyColor.negative
+        case .neutral: TrendysseyColor.secondaryText
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .bullish: "arrow.up.right"
+        case .bearish: "arrow.down.right"
+        case .neutral: "arrow.left.and.right"
+        }
+    }
+}
+
 extension MarketStateKind {
-    /// Coloured by who the state favours, not by who is currently pressing:
-    /// sellers absorbing a rally is a warning, not a green light.
     var color: Color {
         switch self {
         case .sellerDominance, .sellerTakeover, .sellSideAbsorption, .buyerExhaustion:
@@ -64,309 +80,410 @@ struct MarketStateChip: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
             .background(snapshot.state.color.opacity(0.12), in: Capsule())
-            .accessibilityLabel(snapshot.hasActiveState
-                ? "\(snapshot.headline), \(snapshot.stateScore) / 100"
-                : L10n.text("Market is quiet", "Piyasa durgun"))
     }
 }
 
-/// The contest as one row: both sides of a dimension on a shared 0-100 scale,
-/// meeting in the middle so the longer bar is the side winning that dimension.
-private struct ContestRow: View {
-    let pair: MarketMetricPair
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            // Each side's number sits on its own side of the title, matching
-            // the bar underneath. Reading them both from the right, as they
-            // were, fought the geometry they describe.
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                HStack(spacing: 4) {
-                    Text("\(pair.sellerValue)")
-                        .font(.caption.bold()).monospacedDigit()
-                        .foregroundStyle(TrendysseyColor.negative)
-                    deltaBadge(pair.sellerChange, side: .sellers)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                Text(pair.title)
-                    .font(.caption.weight(.semibold))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.75)
-                    .layoutPriority(1)
-
-                HStack(spacing: 4) {
-                    deltaBadge(pair.buyerChange, side: .buyers)
-                    Text("\(pair.buyerValue)")
-                        .font(.caption.bold()).monospacedDigit()
-                        .foregroundStyle(TrendysseyColor.positive)
-                }
-                .frame(maxWidth: .infinity, alignment: .trailing)
-            }
-            GeometryReader { proxy in
-                let half = proxy.size.width / 2
-                ZStack {
-                    Capsule().fill(TrendysseyColor.border)
-                    HStack(spacing: 1) {
-                        HStack(spacing: 0) {
-                            Spacer(minLength: 0)
-                            Capsule()
-                                .fill(TrendysseyColor.negative)
-                                .frame(width: max(2, half * CGFloat(pair.sellerValue) / 100))
-                        }
-                        .frame(width: half)
-                        HStack(spacing: 0) {
-                            Capsule()
-                                .fill(TrendysseyColor.positive)
-                                .frame(width: max(2, half * CGFloat(pair.buyerValue) / 100))
-                            Spacer(minLength: 0)
-                        }
-                        .frame(width: half)
-                    }
-                }
-            }
-            .frame(height: 5)
-            Text(reading)
-                .font(.caption2)
-                .foregroundStyle(TrendysseyColor.secondaryText)
-                .lineSpacing(2)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(
-            "\(pair.title): \(L10n.text("sellers", "satıcılar")) \(pair.sellerValue)\(spoken(pair.sellerChange)), \(L10n.text("buyers", "alıcılar")) \(pair.buyerValue)\(spoken(pair.buyerChange))"
-        )
-    }
-
-    /// Movement since the previous close. A metric that did not move needs no
-    /// badge — the level already says where it stands — and a first reading has
-    /// nothing to compare against, so both render as nothing.
-    @ViewBuilder private func deltaBadge(_ change: Int?, side: MarketControlSide) -> some View {
-        if let change, change != 0 {
-            // Coloured by whether the move helps the reader, who can only be
-            // long: buyers gaining is green, sellers gaining is red. Every
-            // column argues for its own side, so this holds on all six rows.
-            let helpsReader = side == .buyers ? change > 0 : change < 0
-            let tint = helpsReader ? TrendysseyColor.positive : TrendysseyColor.negative
-            // A true minus sign rather than a hyphen, so it matches the weight
-            // of the plus beside it instead of reading as a stub.
-            Text(change > 0 ? "+\(change)" : "\u{2212}\(abs(change))")
-                .font(.system(size: 9, weight: .bold, design: .rounded))
-                .monospacedDigit()
-                .foregroundStyle(tint)
-                .lineLimit(1)
-                .fixedSize()
-                .padding(.horizontal, 4)
-                .padding(.vertical, 2)
-                .background(tint.opacity(0.14), in: Capsule())
-        }
-    }
-
-    private func spoken(_ change: Int?) -> String {
-        guard let change, change != 0 else { return "" }
-        return change > 0
-            ? L10n.text(", up \(change)", ", \(change) arttı")
-            : L10n.text(", down \(abs(change))", ", \(abs(change)) azaldı")
-    }
-
-    private var reading: String {
-        switch pair.id {
-        case "pressure":
-            switch pair.leader {
-            case .sellers: L10n.text(
-                "Sellers are swinging harder than buyers right now.",
-                "Şu anda satıcılar alıcılardan daha sert vuruyor."
-            )
-            case .buyers: L10n.text(
-                "Buyers are swinging harder than sellers right now.",
-                "Şu anda alıcılar satıcılardan daha sert vuruyor."
-            )
-            case .contested: L10n.text(
-                "Both sides are pressing with about the same force.",
-                "İki taraf da yaklaşık aynı güçle bastırıyor."
-            )
-            }
-        case "efficiency":
-            switch pair.leader {
-            case .sellers: L10n.text(
-                "Sellers get more price movement per unit of flow than buyers do.",
-                "Satıcılar, harcadıkları akış başına alıcılardan daha fazla fiyat hareketi alıyor."
-            )
-            case .buyers: L10n.text(
-                "Buyers get more price movement per unit of flow than sellers do.",
-                "Alıcılar, harcadıkları akış başına satıcılardan daha fazla fiyat hareketi alıyor."
-            )
-            case .contested: L10n.text(
-                "Neither side converts its flow into price better than the other.",
-                "Hiçbir taraf akışını fiyata diğerinden daha iyi çeviremiyor."
-            )
-            }
-        case "response":
-            switch pair.leader {
-            case .sellers: L10n.text(
-                "Price has travelled further down than up over the window.",
-                "Fiyat, pencere boyunca aşağı yönde yukarıdan daha çok yol aldı."
-            )
-            case .buyers: L10n.text(
-                "Price has travelled further up than down over the window.",
-                "Fiyat, pencere boyunca yukarı yönde aşağıdan daha çok yol aldı."
-            )
-            case .contested: L10n.text(
-                "Price has gone nowhere in particular; the two directions cancel out.",
-                "Fiyat belirli bir yere gitmedi; iki yön birbirini götürüyor."
-            )
-            }
-        case "absorption":
-            switch pair.leader {
-            case .sellers: L10n.text(
-                "Sellers are quietly selling into the buying.",
-                "Satıcılar sessizce alımın içine satıyor."
-            )
-            case .buyers: L10n.text(
-                "Buyers are quietly taking the other side of the selling.",
-                "Alıcılar sessizce satışın karşı tarafını alıyor."
-            )
-            case .contested: L10n.text(
-                "Neither side is absorbing the other in any meaningful amount.",
-                "Hiçbir taraf diğerini anlamlı ölçüde emmiyor."
-            )
-            }
-        case "readiness":
-            switch pair.leader {
-            case .sellers: L10n.text(
-                "Price is coiled nearer its high, where a turn down would start.",
-                "Fiyat, aşağı dönüşün başlayacağı tepeye yakın bir yerde sıkışmış."
-            )
-            case .buyers: L10n.text(
-                "Price is coiled nearer its low, where a turn up would start.",
-                "Fiyat, yukarı dönüşün başlayacağı dibe yakın bir yerde sıkışmış."
-            )
-            case .contested: L10n.text(
-                "Price is mid-range and still wide; neither turn has a floor yet.",
-                "Fiyat aralığın ortasında ve hâlâ geniş; iki dönüşün de henüz zemini yok."
-            )
-            }
-        case "resilience":
-            switch pair.leader {
-            case .sellers: L10n.text(
-                "Sellers held price down better than buyers held it up.",
-                "Satıcılar fiyatı aşağıda tutmayı, alıcıların yukarıda tutmasından daha iyi başardı."
-            )
-            case .buyers: L10n.text(
-                "Buyers held price up better than sellers held it down.",
-                "Alıcılar fiyatı yukarıda tutmayı, satıcıların aşağıda tutmasından daha iyi başardı."
-            )
-            case .contested: L10n.text(
-                "Both sides defended price about equally well.",
-                "İki taraf da fiyatı yaklaşık aynı ölçüde savundu."
-            )
-            }
-        default:
-            ""
-        }
-    }
-}
-
+/// Product-facing behavioral read. The old control grid is intentionally not
+/// rendered here: users first see what is developing, why, and what evidence
+/// is still missing before a transition can be considered confirmed.
 struct CurrentMarketStateCard: View {
     let snapshot: MarketStateSnapshot
 
+    private var leading: BehavioralSignal? { snapshot.leadingBehavioralSignal }
+    private var confirmed: Bool { leading?.status == .confirmed }
+    private var direction: BehavioralDirection { leading?.direction ?? .neutral }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 15) {
-            header
-            Text(snapshot.state.explanation)
+        VStack(alignment: .leading, spacing: 18) {
+            hero
+            context
+            behaviorPath
+            if let leading {
+                evidence(for: leading)
+            }
+            transitionRead
+            if snapshot.behavioralSignals.count > 1 {
+                otherSignals
+            }
+            footer
+        }
+    }
+
+    private var hero: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(L10n.text("BEHAVIORAL READ", "DAVRANIŞSAL OKUMA"))
+                        .font(.caption2.bold())
+                        .foregroundStyle(TrendysseyColor.secondaryText)
+                    if let leading {
+                        Label(leading.kind.title, systemImage: direction.icon)
+                            .font(.title3.bold())
+                            .foregroundStyle(direction.color)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        Label(
+                            L10n.text("No distinct transition", "Belirgin geçiş yok"),
+                            systemImage: "waveform.path"
+                        )
+                        .font(.title3.bold())
+                        .foregroundStyle(TrendysseyColor.secondaryText)
+                    }
+                }
+                Spacer(minLength: 8)
+                if let leading {
+                    VStack(alignment: .trailing, spacing: 3) {
+                        Text("\(leading.score)")
+                            .font(.system(size: 38, weight: .bold, design: .rounded))
+                            .monospacedDigit()
+                            .foregroundStyle(direction.color)
+                        Text(confirmed
+                             ? L10n.text("CONFIRMED", "DOĞRULANDI")
+                             : L10n.text("DEVELOPING", "GELİŞİYOR"))
+                            .font(.system(size: 9, weight: .black))
+                            .foregroundStyle(confirmed ? Color.black : direction.color)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 4)
+                            .background(
+                                confirmed ? direction.color : direction.color.opacity(0.12),
+                                in: Capsule()
+                            )
+                    }
+                }
+            }
+            Text(leading?.kind.explanation ?? L10n.text(
+                "The latest closed candles do not show a strong behavioral divergence yet.",
+                "Son kapanmış mumlarda henüz güçlü bir davranışsal ayrışma görülmüyor."
+            ))
+            .font(.subheadline)
+            .foregroundStyle(TrendysseyColor.secondaryText)
+            .lineSpacing(3)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(16)
+        .background(direction.color.opacity(0.08), in: RoundedRectangle(cornerRadius: 18))
+        .overlay(RoundedRectangle(cornerRadius: 18).stroke(direction.color.opacity(0.22), lineWidth: 1))
+    }
+
+    private var context: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            sectionLabel(L10n.text("CONTEXT", "BAĞLAM"))
+            HStack(spacing: 8) {
+                contextPill(title: regimeTitle, icon: regimeIcon, tint: regimeColor)
+                contextPill(
+                    title: snapshot.context.priceVsEma99 == .above
+                        ? L10n.text("Above EMA99", "EMA99 üzerinde")
+                        : L10n.text("Below EMA99", "EMA99 altında"),
+                    icon: "point.3.connected.trianglepath.dotted",
+                    tint: snapshot.context.priceVsEma99 == .above
+                        ? TrendysseyColor.positive
+                        : TrendysseyColor.negative
+                )
+            }
+            Text(snapshot.context.localizedSummary)
                 .font(.caption)
                 .foregroundStyle(TrendysseyColor.secondaryText)
-                .lineSpacing(2)
-            Divider()
-            Text(L10n.text("WHO IS WINNING WHAT", "HANGİ BOYUTU KİM KAZANIYOR"))
-                .font(.caption2.bold())
-                .foregroundStyle(TrendysseyColor.secondaryText)
-            ForEach(snapshot.metricPairs) { pair in
-                ContestRow(pair: pair)
+        }
+    }
+
+    private var behaviorPath: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionLabel(L10n.text("WHAT IS CHANGING", "NE DEĞİŞİYOR"))
+            HStack(spacing: 10) {
+                behaviorStep(
+                    title: L10n.text("Seller exhaustion", "Satıcı tükenişi"),
+                    value: snapshot.behavioralScores.sellerExhaustion,
+                    tint: TrendysseyColor.positive,
+                    threshold: 65
+                )
+                Image(systemName: "chevron.right")
+                    .font(.caption.bold())
+                    .foregroundStyle(TrendysseyColor.secondaryText)
+                behaviorStep(
+                    title: L10n.text("Buyer response", "Alıcı karşılığı"),
+                    value: snapshot.behavioralScores.buyerResponse,
+                    tint: TrendysseyColor.positive,
+                    threshold: 60
+                )
+            }
+            HStack(spacing: 10) {
+                behaviorStep(
+                    title: L10n.text("Buyer exhaustion", "Alıcı tükenişi"),
+                    value: snapshot.behavioralScores.buyerExhaustion,
+                    tint: TrendysseyColor.negative,
+                    threshold: 65
+                )
+                Image(systemName: "chevron.right")
+                    .font(.caption.bold())
+                    .foregroundStyle(TrendysseyColor.secondaryText)
+                behaviorStep(
+                    title: L10n.text("Seller response", "Satıcı karşılığı"),
+                    value: snapshot.behavioralScores.sellerResponse,
+                    tint: TrendysseyColor.negative,
+                    threshold: 60
+                )
             }
             Text(L10n.text(
-                "Calculated from closed candles. This describes the current balance of buying and selling, not a buy or sell instruction.",
-                "Kapanmış mumlardan hesaplanır. Bu, alım ve satımın güncel dengesini anlatır; alım veya satım talimatı değildir."
+                "Weakness and the opposite side's response are measured separately; one does not imply the other.",
+                "Zayıflık ile karşı tarafın cevabı ayrı ölçülür; biri diğerini otomatik olarak göstermez."
             ))
             .font(.caption2)
             .foregroundStyle(TrendysseyColor.secondaryText)
-            .lineSpacing(2)
         }
     }
 
-    private var header: some View {
+    private func evidence(for signal: BehavioralSignal) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(L10n.text("MARKET CONTROL", "PİYASA KONTROLÜ"))
-                        .font(.caption2.bold())
-                        .foregroundStyle(TrendysseyColor.secondaryText)
-                    Label(snapshot.headline, systemImage: snapshot.state.systemImage)
+            sectionLabel(L10n.text("EVIDENCE", "KANITLAR"))
+            FlowLayout(spacing: 7) {
+                ForEach(signal.evidence, id: \.self) { item in
+                    Label(evidenceTitle(item), systemImage: "checkmark")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(direction.color)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 6)
+                        .background(direction.color.opacity(0.10), in: Capsule())
+                }
+            }
+        }
+    }
+
+    private var transitionRead: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionLabel(L10n.text("CONFIRMATION", "DOĞRULAMA"))
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: confirmed ? "checkmark.seal.fill" : "hourglass")
+                    .foregroundStyle(confirmed ? direction.color : TrendysseyColor.warning)
+                    .frame(width: 22)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(confirmed
+                         ? L10n.text("Structural transition confirmed", "Yapısal geçiş doğrulandı")
+                         : L10n.text("Transition not confirmed yet", "Geçiş henüz doğrulanmadı"))
                         .font(.subheadline.bold())
-                        .foregroundStyle(snapshot.state.color)
-                        .lineLimit(2)
-                        .minimumScaleFactor(0.8)
+                        .foregroundStyle(confirmed ? direction.color : TrendysseyColor.warning)
+                    Text(transitionExplanation)
+                        .font(.caption)
+                        .foregroundStyle(TrendysseyColor.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                Spacer(minLength: 8)
-                if snapshot.hasActiveState {
-                    Text("\(snapshot.stateScore)")
-                        .font(.system(size: 30, weight: .bold, design: .rounded))
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                (confirmed ? direction.color : TrendysseyColor.warning).opacity(0.08),
+                in: RoundedRectangle(cornerRadius: 14)
+            )
+        }
+    }
+
+    private var otherSignals: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            sectionLabel(L10n.text("OTHER READS", "DİĞER OKUMALAR"))
+            ForEach(Array(snapshot.behavioralSignals.dropFirst().prefix(4))) { signal in
+                HStack(spacing: 9) {
+                    Image(systemName: signal.status == .confirmed ? "checkmark.seal.fill" : "waveform.path.ecg")
+                        .foregroundStyle(signal.direction.color)
+                    Text(signal.kind.title)
+                        .font(.caption.weight(.semibold))
+                        .lineLimit(2)
+                    Spacer()
+                    Text("\(signal.score)")
+                        .font(.caption.bold())
                         .monospacedDigit()
-                        + Text(" / 100")
-                        .font(.caption)
-                        .foregroundColor(TrendysseyColor.secondaryText)
+                        .foregroundStyle(signal.direction.color)
                 }
-            }
-            // Two facts, not one sentence: who holds control, and what is
-            // happening to their grip. "SELLERS · WEAKENING" reads faster than
-            // the state name it is built from.
-            HStack(spacing: 8) {
-                factBox(
-                    caption: L10n.text("CONTROL", "KONTROL"),
-                    value: snapshot.state.controlSide == .contested
-                        ? L10n.text("SPLIT", "PAYLAŞILMIŞ")
-                        : snapshot.state.controlSide.label.uppercased(),
-                    tint: snapshot.state.controlSide.color,
-                    icon: snapshot.state.controlSide == .sellers
-                        ? "arrow.down"
-                        : snapshot.state.controlSide == .buyers ? "arrow.up" : "arrow.left.arrow.right"
-                )
-                factBox(
-                    caption: L10n.text("PHASE", "DURUM"),
-                    value: snapshot.state.stage.label,
-                    tint: snapshot.state.color,
-                    icon: snapshot.state.systemImage
-                )
+                .padding(.vertical, 2)
             }
         }
     }
 
-    private func factBox(caption: String, value: String, tint: Color, icon: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(caption)
+    private var footer: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "clock")
+            Text(L10n.text("Closed candle: ", "Kapanmış mum: "))
+            Text(snapshot.candleCloseTime, style: .relative)
+            Spacer()
+            Text(L10n.text("Not investment advice", "Yatırım tavsiyesi değil"))
+        }
+        .font(.caption2)
+        .foregroundStyle(TrendysseyColor.secondaryText)
+    }
+
+    private func behaviorStep(title: String, value: Int, tint: Color, threshold: Int) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(title)
+                    .font(.caption2.weight(.semibold))
+                    .lineLimit(2)
+                Spacer(minLength: 4)
+                Text("\(value)")
+                    .font(.headline.bold())
+                    .monospacedDigit()
+                    .foregroundStyle(tint)
+            }
+            ProgressView(value: Double(value), total: 100)
+                .tint(tint)
+            Text(value >= threshold
+                 ? L10n.text("Threshold met", "Eşik geçildi")
+                 : L10n.text("Needs \(threshold)", "\(threshold) gerekli"))
                 .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(TrendysseyColor.secondaryText)
-            Label(value, systemImage: icon)
-                .font(.footnote.bold())
-                .foregroundStyle(tint)
-                .lineLimit(1)
-                .minimumScaleFactor(0.6)
+                .foregroundStyle(value >= threshold ? tint : TrendysseyColor.secondaryText)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 9)
-        .background(tint.opacity(0.10), in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(tint.opacity(0.25), lineWidth: 0.5))
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(caption): \(value)")
+        .padding(11)
+        .frame(maxWidth: .infinity, minHeight: 92, alignment: .topLeading)
+        .background(TrendysseyColor.elevated, in: RoundedRectangle(cornerRadius: 13))
     }
 
-    private func signed(_ value: Int) -> String { value > 0 ? "+\(value)" : "\(value)" }
+    private func contextPill(title: String, icon: String, tint: Color) -> some View {
+        Label(title, systemImage: icon)
+            .font(.caption2.bold())
+            .foregroundStyle(tint)
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(tint.opacity(0.09), in: Capsule())
+    }
 
-    private func changeBadgeColor(_ value: Int) -> Color {
-        if value > 0 { return TrendysseyColor.positive }
-        if value < 0 { return TrendysseyColor.negative }
-        return TrendysseyColor.warning
+    private func sectionLabel(_ text: String) -> some View {
+        Text(text)
+            .font(.caption2.bold())
+            .tracking(0.7)
+            .foregroundStyle(TrendysseyColor.secondaryText)
+    }
+
+    private var regimeTitle: String {
+        switch snapshot.context.regime {
+        case .bullish: L10n.text("Bullish regime", "Yükseliş rejimi")
+        case .bearish: L10n.text("Bearish regime", "Düşüş rejimi")
+        case .range: L10n.text("Range regime", "Yatay rejim")
+        }
+    }
+
+    private var regimeIcon: String {
+        switch snapshot.context.regime {
+        case .bullish: "chart.line.uptrend.xyaxis"
+        case .bearish: "chart.line.downtrend.xyaxis"
+        case .range: "arrow.left.and.right"
+        }
+    }
+
+    private var regimeColor: Color {
+        switch snapshot.context.regime {
+        case .bullish: TrendysseyColor.positive
+        case .bearish: TrendysseyColor.negative
+        case .range: TrendysseyColor.secondaryText
+        }
+    }
+
+    private var transitionExplanation: String {
+        if confirmed {
+            return L10n.text(
+                "Weakness, opposite-side response and a structural break now agree.",
+                "Zayıflık, karşı tarafın cevabı ve yapısal kırılım artık aynı şeyi söylüyor."
+            )
+        }
+        if direction == .bullish {
+            if snapshot.behavioralScores.sellerExhaustion < 65 {
+                return L10n.text("Seller effectiveness must deteriorate further before a bullish handover can qualify.", "Yükseliş yönlü devralım için satıcı etkinliğinin daha fazla bozulması gerekiyor.")
+            }
+            if snapshot.behavioralScores.buyerResponse < 60 {
+                return L10n.text("Sellers are weakening, but buyers have not responded strongly enough yet.", "Satıcılar zayıflıyor ancak alıcıların cevabı henüz yeterince güçlü değil.")
+            }
+            return L10n.text("Behavior is aligned, but price still needs a structural reclaim.", "Davranış uyumlu ancak fiyatın hâlâ yapısal bir seviyeyi geri alması gerekiyor.")
+        }
+        if direction == .bearish {
+            if snapshot.behavioralScores.buyerExhaustion < 65 {
+                return L10n.text("Buyer effectiveness must deteriorate further before a bearish handover can qualify.", "Düşüş yönlü devralım için alıcı etkinliğinin daha fazla bozulması gerekiyor.")
+            }
+            if snapshot.behavioralScores.sellerResponse < 60 {
+                return L10n.text("Buyers are weakening, but sellers have not responded strongly enough yet.", "Alıcılar zayıflıyor ancak satıcıların cevabı henüz yeterince güçlü değil.")
+            }
+            return L10n.text("Behavior is aligned, but price still needs a structural breakdown.", "Davranış uyumlu ancak fiyatın hâlâ yapısal bir seviyeyi kırması gerekiyor.")
+        }
+        return L10n.text("No side has assembled enough evidence for a handover.", "Hiçbir taraf devralım için yeterli kanıtı bir araya getirmedi.")
+    }
+
+    private func evidenceTitle(_ key: String) -> String {
+        switch key {
+        case "seller_pressure_present": L10n.text("Seller pressure present", "Satıcı baskısı var")
+        case "buyer_pressure_present": L10n.text("Buyer pressure present", "Alıcı baskısı var")
+        case "no_meaningful_new_low": L10n.text("No meaningful new low", "Anlamlı yeni dip yok")
+        case "no_meaningful_new_high": L10n.text("No meaningful new high", "Anlamlı yeni tepe yok")
+        case "downside_extensions_shrinking": L10n.text("Downside extensions shrinking", "Aşağı uzamalar küçülüyor")
+        case "upside_extensions_shrinking": L10n.text("Upside extensions shrinking", "Yukarı uzamalar küçülüyor")
+        case "seller_pressure_rising": L10n.text("Seller pressure rising", "Satıcı baskısı artıyor")
+        case "buyer_pressure_rising": L10n.text("Buyer pressure rising", "Alıcı baskısı artıyor")
+        case "downside_response_falling": L10n.text("Downside response falling", "Düşüş tepkisi azalıyor")
+        case "upside_response_falling": L10n.text("Upside response falling", "Yükseliş tepkisi azalıyor")
+        case "support_broken": L10n.text("Support was broken", "Destek kırıldı")
+        case "support_reclaimed": L10n.text("Support reclaimed", "Destek geri alındı")
+        case "resistance_broken": L10n.text("Resistance was broken", "Direnç kırıldı")
+        case "resistance_rejected": L10n.text("Resistance rejected", "Direnç reddedildi")
+        case "recovery_ratio_rising": L10n.text("Recovery ratio rising", "Toparlanma oranı artıyor")
+        case "recovery_speed_measured": L10n.text("Recovery speed improving", "Toparlanma hızı iyileşiyor")
+        case "seller_efficiency_falling": L10n.text("Seller efficiency falling", "Satıcı etkinliği düşüyor")
+        case "buyer_efficiency_falling": L10n.text("Buyer efficiency falling", "Alıcı etkinliği düşüyor")
+        case "downside_progress_falling": L10n.text("Downside progress fading", "Düşüş ilerlemesi zayıflıyor")
+        case "upside_progress_falling": L10n.text("Upside progress fading", "Yükseliş ilerlemesi zayıflıyor")
+        case "seller_exhaustion": L10n.text("Seller exhaustion", "Satıcı tükenişi")
+        case "buyer_exhaustion": L10n.text("Buyer exhaustion", "Alıcı tükenişi")
+        case "buyer_response": L10n.text("Buyer response", "Alıcı karşılığı")
+        case "seller_response": L10n.text("Seller response", "Satıcı karşılığı")
+        case "structure_reclaimed": L10n.text("Structure reclaimed", "Yapı geri alındı")
+        case "structure_broken": L10n.text("Structure broken", "Yapı kırıldı")
+        default: key.replacingOccurrences(of: "_", with: " ").capitalized
+        }
+    }
+}
+
+/// A compact wrapping layout for evidence chips without truncating longer
+/// Turkish labels or committing the screen to a fixed grid.
+private struct FlowLayout: Layout {
+    let spacing: CGFloat
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        let width = proposal.width ?? 0
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > 0, x + size.width > width {
+                x = 0
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
+        return CGSize(width: width, height: y + rowHeight)
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        var x = bounds.minX
+        var y = bounds.minY
+        var rowHeight: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > bounds.minX, x + size.width > bounds.maxX {
+                x = bounds.minX
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            subview.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
     }
 }

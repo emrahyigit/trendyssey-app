@@ -1,24 +1,26 @@
 import SwiftUI
 import Charts
 
-private enum ScenarioMarketStateFilter: String, CaseIterable, Identifiable {
-    case any
+private enum ScenarioBehaviorFilter: String, CaseIterable, Identifiable {
+    case anyBullish = "any_bullish"
     case buyerTakeover = "buyer_takeover"
+    case failedBreakdown = "failed_breakdown"
     case sellerExhaustion = "seller_exhaustion"
-    case buySideAbsorption = "buy_side_absorption"
-    case sellerImpactFading = "seller_impact_fading"
-    case sellerDominance = "seller_dominance"
-    case buyerDominance = "buyer_dominance"
-    case buyerImpactFading = "buyer_impact_fading"
-    case sellSideAbsorption = "sell_side_absorption"
-    case buyerExhaustion = "buyer_exhaustion"
-    case sellerTakeover = "seller_takeover"
-    case balanced
-    case lowParticipation = "low_participation"
+    case buyerRecovery = "buyer_recovery_strengthening"
+    case sellDivergence = "sell_pressure_downside_divergence"
+    case lowerLowFailure = "lower_low_failure"
+    case downsideWeakening = "downside_progress_weakening"
 
     var id: String { rawValue }
-    var state: MarketStateKind? { MarketStateKind(rawValue: rawValue) }
-    var title: String { state?.title ?? L10n.text("Any state", "Tüm durumlar") }
+    var kind: BehavioralSignalKind? { BehavioralSignalKind(rawValue: rawValue) }
+    var kinds: [BehavioralSignalKind] {
+        kind.map { [$0] } ?? [
+            .buyerTakeover, .failedBreakdown, .sellerExhaustion,
+            .buyerRecoveryStrengthening, .sellPressureDownsideDivergence,
+            .lowerLowFailure, .downsideProgressWeakening,
+        ]
+    }
+    var title: String { kind?.title ?? L10n.text("Any bullish behavior", "Tüm yükseliş davranışları") }
 }
 
 struct DailyBreakoutSimulatorView: View {
@@ -35,9 +37,10 @@ struct DailyBreakoutSimulatorView: View {
     /// market, profit or loss. 72h default: the trend backtest validated an
     /// exit horizon of 3× the 24h journey horizon.
     @AppStorage("scenarioMaxOpenHours") private var maxOpenHours = 72
-    /// State frozen on the entry candle. Confirmation is the conservative
-    /// default; "any" keeps older history without a state snapshot visible.
-    @AppStorage("scenarioRequiredMarketState") private var requiredMarketStateRaw = ScenarioMarketStateFilter.buyerTakeover.rawValue
+    /// The behavior frozen on the entry candle. Confirmation is conservative:
+    /// exhaustion alone never masquerades as buyer control.
+    @AppStorage("scenarioBehaviorFilter") private var behaviorFilterRaw = ScenarioBehaviorFilter.buyerTakeover.rawValue
+    @AppStorage("scenarioRequireBehaviorConfirmed") private var requireConfirmed = true
     /// The tournament winner's exit: a stop trailing the high watermark by
     /// multiplier × ATR, no profit target. On by default — it beat the fixed
     /// target/stop pair with every entry method on every timeframe.
@@ -46,7 +49,7 @@ struct DailyBreakoutSimulatorView: View {
     /// Minimum 24h quote volume in millions of dollars; 0 disables the filter.
     @AppStorage("scenarioMinimumVolumeMillions") private var minimumVolumeMillions = 10
     /// Minimum score of the state frozen on the entry candle; 0 disables it.
-    @AppStorage("scenarioMinimumStateScore") private var minimumStateScore = 0
+    @AppStorage("scenarioMinimumBehaviorScore") private var minimumBehaviorScore = 60
     @State private var isApplyingToTrader = false
     @State private var appliedToTrader = false
     @State private var applyFailed = false
@@ -59,8 +62,8 @@ struct DailyBreakoutSimulatorView: View {
     private var lookbackBinding: Binding<ScenarioLookback> {
         Binding(get: { lookback }, set: { lookbackHours = $0.rawValue })
     }
-    private var requiredMarketState: ScenarioMarketStateFilter {
-        ScenarioMarketStateFilter(rawValue: requiredMarketStateRaw) ?? .buyerTakeover
+    private var behaviorFilter: ScenarioBehaviorFilter {
+        ScenarioBehaviorFilter(rawValue: behaviorFilterRaw) ?? .buyerTakeover
     }
 
     private struct SimulatedTrade: Identifiable {
@@ -90,14 +93,17 @@ struct DailyBreakoutSimulatorView: View {
         entries.filter { $0.quoteVolume24h >= minimumQuoteVolume }
     }
 
-    private var stateEligibleEntries: [BreakoutScenarioEntry] {
-        guard let required = requiredMarketState.state else { return volumeEligibleEntries }
-        return volumeEligibleEntries.filter { $0.marketState == required }
+    private var behaviorEligibleEntries: [BreakoutScenarioEntry] {
+        volumeEligibleEntries.filter { entry in
+            guard let signal = entry.behavioralSignal,
+                  signal.direction == .bullish,
+                  behaviorFilter.kinds.contains(signal.kind) else { return false }
+            return !requireConfirmed || signal.status == .confirmed
+        }
     }
 
     private var eligibleEntries: [BreakoutScenarioEntry] {
-        guard minimumStateScore > 0 else { return stateEligibleEntries }
-        return stateEligibleEntries.filter { ($0.marketStateScore ?? 0) >= minimumStateScore }
+        behaviorEligibleEntries.filter { ($0.behavioralSignal?.score ?? 0) >= minimumBehaviorScore }
     }
 
     private var minimumVolumeText: String {
@@ -109,8 +115,8 @@ struct DailyBreakoutSimulatorView: View {
     private var emptyResultDescription: String {
         if entries.isEmpty {
             return L10n.text(
-                "No Market State transition was recorded in this window. Try a wider scenario window.",
-                "Bu aralıkta bir Piyasa Durumu geçişi kaydedilmedi. Senaryo aralığını genişletmeyi deneyebilirsin."
+                "No bullish behavioral transition was recorded in this window. Try a wider window.",
+                "Bu aralıkta yükseliş yönlü davranış geçişi kaydedilmedi. Aralığı genişletmeyi deneyebilirsin."
             )
         }
         if volumeEligibleEntries.isEmpty {
@@ -119,15 +125,15 @@ struct DailyBreakoutSimulatorView: View {
                 "Giriş var ancak tüm coinlerin hacmi \(minimumVolumeText) çizgisinin altında."
             )
         }
-        if stateEligibleEntries.isEmpty {
+        if behaviorEligibleEntries.isEmpty {
             return L10n.text(
-                "No entry was recorded with the \(requiredMarketState.title) state in this window. Choose Any state or widen the window; state history begins when the state engine was activated.",
-                "Bu aralıkta \(requiredMarketState.title) durumuyla kaydedilmiş giriş yok. Tüm durumları seçebilir veya aralığı genişletebilirsin; durum geçmişi motorun etkinleştirildiği anda başlar."
+                "No \(behaviorFilter.title) event matched the confirmation rule in this window.",
+                "Bu aralıkta teyit kuralına uyan \(behaviorFilter.title) olayı yok."
             )
         }
         return L10n.text(
-            "No entry reached the minimum state score of \(minimumStateScore).",
-            "Hiçbir giriş \(minimumStateScore) minimum durum puanına ulaşmadı."
+            "No behavior reached the minimum evidence score of \(minimumBehaviorScore).",
+            "Hiçbir davranış \(minimumBehaviorScore) minimum kanıt puanına ulaşmadı."
         )
     }
 
@@ -217,8 +223,8 @@ struct DailyBreakoutSimulatorView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                     Label(
                         L10n.text(
-                            "Market-state snapshots are evaluated at the entry candle without using later data. Older events may show State not recorded because state history starts with the new engine.",
-                            "Piyasa durumu kayıtları, sonraki veriler kullanılmadan giriş mumunda değerlendirilir. Durum geçmişi yeni motorla başladığı için eski olaylarda Durum kaydedilmemiş yazabilir."
+                            "Behavior is frozen on the entry candle. Exhaustion says the old side is weakening; confirmation is required to claim that buyers have taken control.",
+                            "Davranış giriş mumunda dondurulur. Tükeniş eski tarafın zayıfladığını söyler; kontrolün alıcılara geçtiğini söylemek için teyit gerekir."
                         ),
                         systemImage: "trophy"
                     )
@@ -242,7 +248,7 @@ struct DailyBreakoutSimulatorView: View {
             .clipped()
         }
         .background(TrendysseyColor.canvas.ignoresSafeArea())
-        .navigationTitle(L10n.text("Breakout Scenario", "Kırılım Senaryosu"))
+        .navigationTitle(L10n.text("Behavior Scenario", "Davranış Senaryosu"))
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { applyTunedDefaultsOnce() }
         .onChange(of: traderParameterSignature) {
@@ -277,8 +283,9 @@ struct DailyBreakoutSimulatorView: View {
         maxOpenHours = 72
         minimumDivide = 5
         minimumVolumeMillions = 10
-        minimumStateScore = 0
-        requiredMarketStateRaw = ScenarioMarketStateFilter.buyerTakeover.rawValue
+        minimumBehaviorScore = 60
+        behaviorFilterRaw = ScenarioBehaviorFilter.buyerTakeover.rawValue
+        requireConfirmed = true
         useChandelierExit = true
         chandelierMultiplier = 3
     }
@@ -290,8 +297,8 @@ struct DailyBreakoutSimulatorView: View {
             ? L10n.text("the chandelier \(Self.multiplierText(chandelierMultiplier))×ATR trail", "chandelier \(Self.multiplierText(chandelierMultiplier))×ATR izini")
             : L10n.text("the fixed target/stop pair", "sabit hedef/stop çiftini")
         return L10n.text(
-            "Sends \(exit), holding limit, slots, the \(requiredMarketState.title) state and its minimum score to the trader.",
-            "İşlemciye \(exit), süre limitini, slotları, \(requiredMarketState.title) durumunu ve minimum puanını gönderir."
+            "Sends \(exit), holding limit, slots, \(behaviorFilter.title), confirmation and the evidence floor to the trader.",
+            "İşlemciye \(exit), süre limitini, slotları, \(behaviorFilter.title), teyit kuralını ve kanıt tabanını gönderir."
         )
     }
 
@@ -301,13 +308,13 @@ struct DailyBreakoutSimulatorView: View {
         [
             "\(profitTarget)", "\(stopLoss)",
             "\(maxOpenHours)", "\(minimumDivide)", "\(minimumVolumeMillions)",
-            requiredMarketState.rawValue, "\(minimumStateScore)",
+            behaviorFilter.rawValue, "\(minimumBehaviorScore)", "\(requireConfirmed)",
             "\(useChandelierExit)", "\(chandelierMultiplier)",
             preferredTimeframe,
         ].joined(separator: "|")
     }
 
-    /// Pushes the page's saved Market State parameters into the auto trader.
+    /// Pushes the page's behavioral entry contract into the auto trader.
     private var applyToTraderCard: some View {
         SurfaceCard {
             VStack(alignment: .leading, spacing: 8) {
@@ -316,8 +323,8 @@ struct DailyBreakoutSimulatorView: View {
                 } label: {
                     HStack {
                         Label(
-                            L10n.text("Reset to State Defaults", "Durum Varsayılanlarına Dön"),
-                            systemImage: "waveform.path.ecg"
+                            L10n.text("Reset to Behavioral Default", "Davranış Varsayılanına Dön"),
+                            systemImage: "point.3.connected.trianglepath.dotted"
                         )
                         .font(.subheadline.weight(.semibold))
                         Spacer()
@@ -325,8 +332,8 @@ struct DailyBreakoutSimulatorView: View {
                 }
                 .foregroundStyle(TrendysseyColor.accent)
                 Text(L10n.text(
-                    "Bullish Confirmation entries, chandelier 3×ATR trail, 72h limit, 5 slots and a $10M volume floor.",
-                    "Yukarı Yönlü Teyit girişleri, chandelier 3×ATR iz, 72s limit, 5 slot ve 10M$ hacim tabanı."
+                    "Confirmed buyer takeovers with evidence ≥60, chandelier 3×ATR trail, 72h limit, 5 slots and a $10M volume floor.",
+                    "Kanıtı ≥60 olan teyitli alıcı devralımları, chandelier 3×ATR iz, 72s limit, 5 slot ve 10M$ hacim tabanı."
                 ))
                 .font(.caption2).foregroundStyle(TrendysseyColor.secondaryText).lineSpacing(2)
                 Divider().padding(.vertical, 4)
@@ -370,8 +377,11 @@ struct DailyBreakoutSimulatorView: View {
                 minimumSignalStrength: 0,
                 minimumSuccessRate: 0,
                 minimumQuoteVolume: Double(minimumVolumeMillions) * 1_000_000,
-                allowedMarketStates: requiredMarketState.state.map { [$0] } ?? MarketStateKind.allCases,
-                minimumStateScore: minimumStateScore,
+                allowedMarketStates: MarketStateKind.allCases,
+                minimumStateScore: 0,
+                allowedBehaviorSignals: behaviorFilter.kinds,
+                minimumBehaviorScore: minimumBehaviorScore,
+                requireBehaviorConfirmed: requireConfirmed,
                 useChandelierExit: useChandelierExit,
                 chandelierAtrMultiplier: chandelierMultiplier,
                 timeframe: preferredTimeframe,
@@ -388,13 +398,13 @@ struct DailyBreakoutSimulatorView: View {
             Label(L10n.text("PRO SIMULATOR", "PRO SİMÜLATÖR"), systemImage: "function")
                 .font(.caption.bold()).foregroundStyle(TrendysseyColor.accent)
             Text(L10n.text(
-                "What would Market State transitions have returned if you invested $100k?",
-                "Piyasa Durumu geçişlerinde 100k $ yatırsaydın sonuç ne olurdu?"
+                "What happened after the market printed these behaviors?",
+                "Piyasa bu davranışları ürettikten sonra ne oldu?"
             ))
                 .font(.title2.bold())
             Text(L10n.text(
-                "Every state transition matching your filters in \(lookback.title.lowercased()) is listed below as a realized sale or an open position.",
-                "\(lookback.title) içinde filtrelerine uyan her durum geçişi, aşağıda gerçekleşen satış veya açık pozisyon olarak listelenir."
+                "The replay follows $100k through only the bullish behaviors that matched your evidence contract in \(lookback.title.lowercased()).",
+                "Tekrar, 100 bin doları \(lookback.title) içinde yalnızca kanıt sözleşmene uyan yükseliş davranışlarında izler."
             ))
             .font(.subheadline).foregroundStyle(TrendysseyColor.secondaryText)
         }
@@ -408,10 +418,9 @@ struct DailyBreakoutSimulatorView: View {
                 if minimumVolumeMillions > 0 {
                     chip(L10n.text("Vol. ≥ \(minimumVolumeText)", "Hacim ≥ \(minimumVolumeText)"), icon: "drop.fill")
                 }
-                chip(requiredMarketState.title, icon: requiredMarketState.state?.systemImage ?? "square.grid.2x2")
-                if minimumStateScore > 0 {
-                    chip(L10n.text("State ≥ \(minimumStateScore)", "Durum ≥ \(minimumStateScore)"), icon: "gauge.with.dots.needle.67percent")
-                }
+                chip(behaviorFilter.title, icon: behaviorFilter.kind.map { _ in "waveform.path.ecg" } ?? "square.grid.2x2")
+                chip(L10n.text("Evidence ≥ \(minimumBehaviorScore)", "Kanıt ≥ \(minimumBehaviorScore)"), icon: "checklist")
+                chip(requireConfirmed ? L10n.text("Confirmed", "Teyitli") : L10n.text("Developing + confirmed", "Gelişen + teyitli"), icon: requireConfirmed ? "checkmark.seal.fill" : "clock.arrow.circlepath")
                 if useChandelierExit {
                     chip(
                         L10n.text("Chandelier \(Self.multiplierText(chandelierMultiplier))×ATR", "Chandelier \(Self.multiplierText(chandelierMultiplier))×ATR"),
@@ -450,11 +459,11 @@ struct DailyBreakoutSimulatorView: View {
                 }
                 Divider()
                 selectionRow(
-                    L10n.text("Entry market state", "Giriş piyasa durumu"),
-                    value: requiredMarketState.title
+                    L10n.text("Behavior to replay", "Tekrarlanacak davranış"),
+                    value: behaviorFilter.title
                 ) {
-                    Picker("", selection: $requiredMarketStateRaw) {
-                        ForEach(ScenarioMarketStateFilter.allCases) { filter in
+                    Picker("", selection: $behaviorFilterRaw) {
+                        ForEach(ScenarioBehaviorFilter.allCases) { filter in
                             Text(filter.title).tag(filter.rawValue)
                         }
                     }
@@ -462,13 +471,28 @@ struct DailyBreakoutSimulatorView: View {
                 Divider()
                 stepperRow(
                     L10n.text(
-                        "Min. state score: \(minimumStateScore > 0 ? "\(minimumStateScore)" : "Off")",
-                        "Min. durum puanı: \(minimumStateScore > 0 ? "\(minimumStateScore)" : "Kapalı")"
+                        "Minimum evidence: \(minimumBehaviorScore)",
+                        "Minimum kanıt: \(minimumBehaviorScore)"
                     ),
-                    value: $minimumStateScore,
-                    range: 0...100,
+                    value: $minimumBehaviorScore,
+                    range: 30...100,
                     step: 5
                 )
+                Divider()
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(L10n.text("Require structural confirmation", "Yapısal teyit zorunlu"))
+                            .font(.subheadline)
+                        Text(L10n.text(
+                            "Prevents exhaustion alone from being treated as buyer control.",
+                            "Tükenişin tek başına alıcı kontrolü sayılmasını engeller."
+                        ))
+                        .font(.caption2).foregroundStyle(TrendysseyColor.secondaryText)
+                    }
+                    Spacer(minLength: 8)
+                    Toggle("", isOn: $requireConfirmed).labelsHidden().tint(TrendysseyColor.accent)
+                }
+                .padding(.vertical, 10)
                 Divider()
                 stepperRow(
                     L10n.text("Min. 24h volume: \(minimumVolumeText)", "Min. 24s hacim: \(minimumVolumeText)"),
@@ -574,7 +598,7 @@ struct DailyBreakoutSimulatorView: View {
                 ContentUnavailableView(
                     L10n.text("Scenario unavailable", "Senaryo kullanılamıyor"),
                     systemImage: "wifi.exclamationmark",
-                    description: Text(L10n.text("State transitions or live price paths could not be loaded.", "Durum geçişleri veya canlı fiyat hareketleri yüklenemedi."))
+                    description: Text(L10n.text("Behavior transitions or live price paths could not be loaded.", "Davranış geçişleri veya canlı fiyat hareketleri yüklenemedi."))
                 )
             }
         } else if eligibleEntries.isEmpty {
@@ -653,20 +677,16 @@ struct DailyBreakoutSimulatorView: View {
                     tint: TrendysseyColor.secondaryText
                 )
             }
-            if requiredMarketState.state != nil {
-                funnelRow(
-                    L10n.text("Different or unrecorded state", "Farklı veya kaydedilmemiş durum"),
-                    volumeEligibleEntries.count - stateEligibleEntries.count,
-                    tint: TrendysseyColor.secondaryText
-                )
-            }
-            if minimumStateScore > 0 {
-                funnelRow(
-                    L10n.text("State score below \(minimumStateScore)", "Durum puanı \(minimumStateScore) altında"),
-                    stateEligibleEntries.count - eligibleEntries.count,
-                    tint: TrendysseyColor.secondaryText
-                )
-            }
+            funnelRow(
+                L10n.text("Different behavior or confirmation", "Farklı davranış veya teyit"),
+                volumeEligibleEntries.count - behaviorEligibleEntries.count,
+                tint: TrendysseyColor.secondaryText
+            )
+            funnelRow(
+                L10n.text("Evidence below \(minimumBehaviorScore)", "Kanıtı \(minimumBehaviorScore) altında"),
+                behaviorEligibleEntries.count - eligibleEntries.count,
+                tint: TrendysseyColor.secondaryText
+            )
             funnelRow(
                 L10n.text("Simulated", "Simüle edilen"),
                 simulatedTrades.count,
@@ -792,7 +812,7 @@ struct DailyBreakoutSimulatorView: View {
                 }
                 Text(entryStateSummary(trade.entry))
                     .font(.caption2)
-                    .foregroundStyle(trade.entry.marketState?.color ?? TrendysseyColor.secondaryText)
+                    .foregroundStyle(trade.entry.behavioralSignal?.direction.color ?? TrendysseyColor.secondaryText)
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 3) {
@@ -840,7 +860,7 @@ struct DailyBreakoutSimulatorView: View {
                 .font(.caption2).foregroundStyle(TrendysseyColor.secondaryText)
                 Text(entryStateSummary(trade.entry))
                     .font(.caption2)
-                    .foregroundStyle(trade.entry.marketState?.color ?? TrendysseyColor.secondaryText)
+                    .foregroundStyle(trade.entry.behavioralSignal?.direction.color ?? TrendysseyColor.secondaryText)
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 3) {
@@ -863,14 +883,13 @@ struct DailyBreakoutSimulatorView: View {
     }
 
     private func entryStateSummary(_ entry: BreakoutScenarioEntry) -> String {
-        guard let state = entry.marketState else {
-            return L10n.text("State not recorded", "Durum kaydedilmemiş")
+        guard let signal = entry.behavioralSignal else {
+            return L10n.text("Behavior not recorded", "Davranış kaydedilmemiş")
         }
-        let score = entry.marketStateScore.map { " · \($0)/100" } ?? ""
-        let change = entry.marketStateChange.flatMap { value in
-            value == 0 ? nil : " · " + L10n.text("change \(value > 0 ? "+" : "")\(value)", "değişim \(value > 0 ? "+" : "")\(value)")
-        } ?? ""
-        return "\(state.title)\(score)\(change)"
+        let status = signal.status == .confirmed
+            ? L10n.text("confirmed", "teyitli")
+            : L10n.text("developing", "gelişiyor")
+        return "\(signal.kind.title) · \(signal.score)/100 · \(status)"
     }
 
     /// Values interpolated into a sentence miss the environment locale, so they

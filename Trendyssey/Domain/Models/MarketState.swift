@@ -204,8 +204,156 @@ struct MarketSetupRead: Identifiable, Sendable {
     var withheldReason: String? = nil
 }
 
+enum BehavioralDirection: String, Codable, Hashable, Sendable {
+    case bullish, bearish, neutral
+}
+
+enum BehavioralSignalStatus: String, Codable, Hashable, Sendable {
+    case developing, confirmed
+}
+
+enum BehavioralTrend: String, Codable, Hashable, Sendable {
+    case rising, falling, flat
+}
+
+enum BehavioralSignalKind: String, Codable, Hashable, Sendable {
+    case lowerLowFailure = "lower_low_failure"
+    case higherHighFailure = "higher_high_failure"
+    case downsideProgressWeakening = "downside_progress_weakening"
+    case upsideProgressWeakening = "upside_progress_weakening"
+    case sellPressureDownsideDivergence = "sell_pressure_downside_divergence"
+    case buyPressureUpsideDivergence = "buy_pressure_upside_divergence"
+    case failedBreakdown = "failed_breakdown"
+    case failedBreakout = "failed_breakout"
+    case buyerRecoveryStrengthening = "buyer_recovery_strengthening"
+    case sellerRecoveryStrengthening = "seller_recovery_strengthening"
+    case sellerExhaustion = "seller_exhaustion"
+    case buyerExhaustion = "buyer_exhaustion"
+    case buyerTakeover = "buyer_takeover"
+    case sellerTakeover = "seller_takeover"
+    case spotFuturesDivergence = "spot_futures_divergence"
+
+    var title: String {
+        switch self {
+        case .lowerLowFailure: L10n.text("Lower-low failure", "Yeni dip başarısız")
+        case .higherHighFailure: L10n.text("Higher-high failure", "Yeni tepe başarısız")
+        case .downsideProgressWeakening: L10n.text("Downside progress weakening", "Düşüş ilerlemesi zayıflıyor")
+        case .upsideProgressWeakening: L10n.text("Upside progress weakening", "Yükseliş ilerlemesi zayıflıyor")
+        case .sellPressureDownsideDivergence: L10n.text("Sell pressure / price divergence", "Satış baskısı / fiyat ayrışması")
+        case .buyPressureUpsideDivergence: L10n.text("Buy pressure / price divergence", "Alım baskısı / fiyat ayrışması")
+        case .failedBreakdown: L10n.text("Breakdown rejected", "Aşağı kırılım reddedildi")
+        case .failedBreakout: L10n.text("Breakout rejected", "Yukarı kırılım reddedildi")
+        case .buyerRecoveryStrengthening: L10n.text("Buyer recovery strengthening", "Alıcı toparlanması güçleniyor")
+        case .sellerRecoveryStrengthening: L10n.text("Seller recovery strengthening", "Satıcı karşılığı güçleniyor")
+        case .sellerExhaustion: L10n.text("Seller exhaustion", "Satıcı tükenişi")
+        case .buyerExhaustion: L10n.text("Buyer exhaustion", "Alıcı tükenişi")
+        case .buyerTakeover: L10n.text("Buyer takeover confirmed", "Alıcı devralımı doğrulandı")
+        case .sellerTakeover: L10n.text("Seller takeover confirmed", "Satıcı devralımı doğrulandı")
+        case .spotFuturesDivergence: L10n.text("Spot / futures divergence", "Spot / vadeli ayrışması")
+        }
+    }
+
+    var explanation: String {
+        switch self {
+        case .lowerLowFailure:
+            L10n.text("Sellers tested the prior low but could not create meaningful downside progress.", "Satıcılar önceki dibi test etti ancak anlamlı bir düşüş ilerlemesi üretemedi.")
+        case .higherHighFailure:
+            L10n.text("Buyers tested the prior high but could not create meaningful upside progress.", "Alıcılar önceki tepeyi test etti ancak anlamlı bir yükseliş ilerlemesi üretemedi.")
+        case .downsideProgressWeakening:
+            L10n.text("New downside extensions are becoming progressively shallower.", "Yeni aşağı uzamalar giderek sığlaşıyor.")
+        case .upsideProgressWeakening:
+            L10n.text("New upside extensions are becoming progressively shallower.", "Yeni yukarı uzamalar giderek sığlaşıyor.")
+        case .sellPressureDownsideDivergence:
+            L10n.text("Selling is intensifying while producing less downside.", "Satış baskısı artarken ürettiği düşüş azalıyor.")
+        case .buyPressureUpsideDivergence:
+            L10n.text("Buying is intensifying while producing less upside.", "Alım baskısı artarken ürettiği yükseliş azalıyor.")
+        case .failedBreakdown:
+            L10n.text("Price broke support but reclaimed it instead of continuing lower.", "Fiyat desteği kırdı ancak düşüşe devam etmek yerine geri aldı.")
+        case .failedBreakout:
+            L10n.text("Price broke resistance but fell back below it instead of continuing higher.", "Fiyat direnci kırdı ancak yükselişe devam etmek yerine altına döndü.")
+        case .buyerRecoveryStrengthening:
+            L10n.text("Buyers are recovering more of each sell wave, increasingly quickly.", "Alıcılar her satış dalgasının daha büyük bölümünü giderek daha hızlı geri alıyor.")
+        case .sellerRecoveryStrengthening:
+            L10n.text("Sellers are recovering more of each buy wave, increasingly quickly.", "Satıcılar her alım dalgasının daha büyük bölümünü giderek daha hızlı geri alıyor.")
+        case .sellerExhaustion:
+            L10n.text("Seller effectiveness is deteriorating; this does not yet prove buyer control.", "Satıcı etkinliği bozuluyor; bu henüz alıcı kontrolünü kanıtlamaz.")
+        case .buyerExhaustion:
+            L10n.text("Buyer effectiveness is deteriorating; this does not yet prove seller control.", "Alıcı etkinliği bozuluyor; bu henüz satıcı kontrolünü kanıtlamaz.")
+        case .buyerTakeover:
+            L10n.text("Seller exhaustion, buyer response and a structural reclaim are all present.", "Satıcı tükenişi, alıcı karşılığı ve yapısal geri alım birlikte mevcut.")
+        case .sellerTakeover:
+            L10n.text("Buyer exhaustion, seller response and a structural break are all present.", "Alıcı tükenişi, satıcı karşılığı ve yapısal kırılım birlikte mevcut.")
+        case .spotFuturesDivergence:
+            L10n.text("Spot demand and leveraged futures positioning are moving differently.", "Spot talep ile kaldıraçlı vadeli pozisyonlanma farklı yönde hareket ediyor.")
+        }
+    }
+}
+
+struct BehavioralSignal: Codable, Hashable, Sendable, Identifiable {
+    let kind: BehavioralSignalKind
+    let score: Int
+    let direction: BehavioralDirection
+    let status: BehavioralSignalStatus
+    let trend: BehavioralTrend
+    let evidence: [String]
+
+    var id: BehavioralSignalKind { kind }
+}
+
+struct MarketBehaviorContext: Codable, Hashable, Sendable {
+    enum Regime: String, Codable, Hashable, Sendable { case bullish, bearish, range }
+    enum Position: String, Codable, Hashable, Sendable { case above, below }
+    enum AverageTrend: String, Codable, Hashable, Sendable { case rising, falling, flat }
+    enum FuturesAvailability: String, Codable, Hashable, Sendable { case unavailable }
+
+    let regime: Regime
+    let priceVsEma25: Position
+    let priceVsEma99: Position
+    let ema25Trend: AverageTrend
+    let futuresAvailability: FuturesAvailability
+    let summary: String
+
+    nonisolated static let unavailable = MarketBehaviorContext(
+        regime: .range,
+        priceVsEma25: .above,
+        priceVsEma99: .above,
+        ema25Trend: .flat,
+        futuresAvailability: .unavailable,
+        summary: ""
+    )
+
+    var localizedSummary: String {
+        switch regime {
+        case .bullish:
+            L10n.text("Broader structure is bullish above EMA25 and EMA99.", "Geniş yapı EMA25 ve EMA99 üzerinde yükseliş yönlü.")
+        case .bearish:
+            L10n.text("Broader structure is bearish below EMA25 and EMA99.", "Geniş yapı EMA25 ve EMA99 altında düşüş yönlü.")
+        case .range:
+            L10n.text("Broader structure is mixed around EMA25 and EMA99.", "Geniş yapı EMA25 ve EMA99 çevresinde karışık.")
+        }
+    }
+}
+
+struct BehavioralStateScores: Codable, Hashable, Sendable {
+    let sellerExhaustion: Int
+    let buyerExhaustion: Int
+    let buyerResponse: Int
+    let sellerResponse: Int
+    let bullishExpansion: Int
+    let bearishExpansion: Int
+
+    nonisolated static let empty = BehavioralStateScores(
+        sellerExhaustion: 0,
+        buyerExhaustion: 0,
+        buyerResponse: 0,
+        sellerResponse: 0,
+        bullishExpansion: 0,
+        bearishExpansion: 0
+    )
+}
+
 struct MarketStateSnapshot: Codable, Hashable, Sendable {
-    static let aPlusMinimumScore = 75
+    nonisolated static let aPlusMinimumScore = 75
 
     let state: MarketStateKind
     let stateScore: Int
@@ -251,6 +399,10 @@ struct MarketStateSnapshot: Codable, Hashable, Sendable {
     let sellerResilience: Int
     let sellerResilienceChange: Int?
 
+    let context: MarketBehaviorContext
+    let behavioralScores: BehavioralStateScores
+    let behavioralSignals: [BehavioralSignal]
+
     /// Slopes over the recent series, which is what the ladder reads.
     let sellerEfficiencyTrend: Int
     let buyerEfficiencyTrend: Int
@@ -266,10 +418,38 @@ struct MarketStateSnapshot: Codable, Hashable, Sendable {
 
     /// A+ is a confirmed handover to buyers, strong enough to stand out.
     var supportsAPlus: Bool {
-        state == .buyerTakeover && stateScore >= Self.aPlusMinimumScore
+        if let takeover = behavioralSignals.first(where: {
+            $0.kind == .buyerTakeover && $0.status == .confirmed
+        }) {
+            return takeover.score >= Self.aPlusMinimumScore
+        }
+        return state == .buyerTakeover && stateScore >= Self.aPlusMinimumScore
     }
 
     var headline: String { state.title(forScore: stateScore) }
+
+    var leadingBehavioralSignal: BehavioralSignal? {
+        behavioralSignals.sorted {
+            if $0.status != $1.status { return $0.status == .confirmed }
+            return $0.score > $1.score
+        }.first
+    }
+
+    /// Bullish transitions lead the home-screen opportunity window. Exhaustion
+    /// alone ranks below an actual structural rejection or confirmed takeover.
+    var bullishTransitionRank: Int {
+        guard let signal = behavioralSignals.first(where: {
+            $0.direction == .bullish && $0.score >= 45
+        }) else { return 0 }
+        return switch signal.kind {
+        case .buyerTakeover: 5
+        case .failedBreakdown: 4
+        case .sellerExhaustion: 3
+        case .sellPressureDownsideDivergence, .lowerLowFailure: 2
+        case .buyerRecoveryStrengthening, .downsideProgressWeakening: 1
+        default: 0
+        }
+    }
 
 
     /// Every dimension as a seller/buyer contest. The left column always holds

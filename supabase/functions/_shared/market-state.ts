@@ -15,7 +15,7 @@
 
 import { atr, ema, type MarketCandle } from "./indicators.ts";
 
-export const MARKET_STATE_SCORING_VERSION = "market-state-v6-evidence";
+export const MARKET_STATE_SCORING_VERSION = "market-state-v7-behavioral";
 
 // Short timeframes need a wider sample to suppress single-candle noise, while
 // long timeframes need a tighter sample so the declared state does not lag by
@@ -51,6 +51,50 @@ export type MarketState =
   | "seller_takeover"
   | "balanced"
   | "low_participation";
+
+export type BehavioralSignalKind =
+  | "lower_low_failure"
+  | "higher_high_failure"
+  | "downside_progress_weakening"
+  | "upside_progress_weakening"
+  | "sell_pressure_downside_divergence"
+  | "buy_pressure_upside_divergence"
+  | "failed_breakdown"
+  | "failed_breakout"
+  | "buyer_recovery_strengthening"
+  | "seller_recovery_strengthening"
+  | "seller_exhaustion"
+  | "buyer_exhaustion"
+  | "buyer_takeover"
+  | "seller_takeover"
+  | "spot_futures_divergence";
+
+export interface BehavioralSignal {
+  kind: BehavioralSignalKind;
+  score: number;
+  direction: "bullish" | "bearish" | "neutral";
+  status: "developing" | "confirmed";
+  trend: "rising" | "falling" | "flat";
+  evidence: string[];
+}
+
+export interface MarketBehaviorContext {
+  regime: "bullish" | "bearish" | "range";
+  priceVsEma25: "above" | "below";
+  priceVsEma99: "above" | "below";
+  ema25Trend: "rising" | "falling" | "flat";
+  futuresAvailability: "unavailable";
+  summary: string;
+}
+
+export interface BehavioralStateScores {
+  sellerExhaustion: number;
+  buyerExhaustion: number;
+  buyerResponse: number;
+  sellerResponse: number;
+  bullishExpansion: number;
+  bearishExpansion: number;
+}
 
 /** Above this the other side has moved price, so no stalemate is left to name. */
 export const ABSORPTION_MAXIMUM_COUNTER_RESPONSE = 70;
@@ -96,6 +140,13 @@ export interface MarketStateObservation {
   buyerResilience: number;
   sellerResilience: number;
 
+  // Context, simultaneous behavioral states and transition signals are kept
+  // separate. A weak seller is not automatically a strong buyer, and neither
+  // condition becomes actionable until structure confirms the handover.
+  context: MarketBehaviorContext;
+  behavioralScores: BehavioralStateScores;
+  behavioralSignals: BehavioralSignal[];
+
   candleCloseTime: number;
   scoringVersion: string;
   features: {
@@ -126,6 +177,22 @@ export interface MarketStateObservation {
     bearishBody: number;
     ema7Reclaim: boolean;
     ema7Loss: boolean;
+    downsideProgressTrend: number;
+    upsideProgressTrend: number;
+    downsideResponseTrend: number;
+    upsideResponseTrend: number;
+    buyerRecoveryRatio: number;
+    sellerRecoveryRatio: number;
+    buyerRecoveryTrend: number;
+    sellerRecoveryTrend: number;
+    buyerRecoverySpeed: number;
+    sellerRecoverySpeed: number;
+    lowerLowFailure: number;
+    higherHighFailure: number;
+    failedBreakdown: number;
+    failedBreakout: number;
+    ema25Reclaim: boolean;
+    ema25Rejection: boolean;
   };
 }
 
@@ -162,6 +229,10 @@ interface RawWindow {
   bearishBody: number;
   ema7Reclaim: boolean;
   ema7Loss: boolean;
+  buyerRecoveryRatio: number;
+  sellerRecoveryRatio: number;
+  buyerRecoverySpeed: number;
+  sellerRecoverySpeed: number;
 }
 
 const clamp = (value: number, minimum = 0, maximum = 1) =>
@@ -375,6 +446,52 @@ function rawWindowAt(
   const ema7Loss = previous.close >= previousEma7 &&
     current.close < currentEma7;
 
+  // Recovery is measured from the extreme of the latest directional wave.
+  // Magnitude and speed stay separate: reclaiming 60% in two candles carries
+  // different information from reclaiming it in twelve.
+  const lowOffset = recent.reduce(
+    (best, candle, offset) => candle.low < recent[best].low ? offset : best,
+    0,
+  );
+  const highOffset = recent.reduce(
+    (best, candle, offset) => candle.high > recent[best].high ? offset : best,
+    0,
+  );
+  const preLowHigh = Math.max(
+    ...recent.slice(0, lowOffset + 1).map((candle) => candle.high),
+  );
+  const postLowHigh = Math.max(
+    ...recent.slice(lowOffset).map((candle) => candle.high),
+  );
+  const sellWave = Math.max(
+    preLowHigh - recent[lowOffset].low,
+    currentAtr * 0.1,
+  );
+  const buyerRecoveryRatio = clamp(
+    (postLowHigh - recent[lowOffset].low) / sellWave,
+  );
+  const buyerRecoverySpeed = clamp(
+    ((postLowHigh - recent[lowOffset].low) / currentAtr) /
+      Math.max(recent.length - lowOffset, 1) / 0.75,
+  );
+  const preHighLow = Math.min(
+    ...recent.slice(0, highOffset + 1).map((candle) => candle.low),
+  );
+  const postHighLow = Math.min(
+    ...recent.slice(highOffset).map((candle) => candle.low),
+  );
+  const buyWave = Math.max(
+    recent[highOffset].high - preHighLow,
+    currentAtr * 0.1,
+  );
+  const sellerRecoveryRatio = clamp(
+    (recent[highOffset].high - postHighLow) / buyWave,
+  );
+  const sellerRecoverySpeed = clamp(
+    ((recent[highOffset].high - postHighLow) / currentAtr) /
+      Math.max(recent.length - highOffset, 1) / 0.75,
+  );
+
   return {
     sellIntensity: sell.intensity,
     buyIntensity: buy.intensity,
@@ -408,6 +525,10 @@ function rawWindowAt(
     bearishBody,
     ema7Reclaim,
     ema7Loss,
+    buyerRecoveryRatio,
+    sellerRecoveryRatio,
+    buyerRecoverySpeed,
+    sellerRecoverySpeed,
   };
 }
 
@@ -469,7 +590,9 @@ const BUYER_STATES = {
 } as const;
 
 /** Which side's ladder a state belongs to, for hysteresis and exhaustion. */
-function familyOf(state: MarketState | null | undefined): "sell" | "buy" | null {
+function familyOf(
+  state: MarketState | null | undefined,
+): "sell" | "buy" | null {
   switch (state) {
     case "seller_dominance":
     case "seller_impact_fading":
@@ -700,6 +823,373 @@ export function classifyMarketState(
   };
 }
 
+interface BehavioralLayerInput {
+  candles: MarketCandle[];
+  window: number;
+  sellerPressure: number;
+  buyerPressure: number;
+  sellerEfficiency: number;
+  buyerEfficiency: number;
+  downsideResponse: number;
+  upsideResponse: number;
+  buySideAbsorption: number;
+  sellSideAbsorption: number;
+  sellerEfficiencyTrend: number;
+  buyerEfficiencyTrend: number;
+  sellerPressureTrend: number;
+  buyerPressureTrend: number;
+  downsideProgressTrend: number;
+  upsideProgressTrend: number;
+  downsideResponseTrend: number;
+  upsideResponseTrend: number;
+  buyerRecoveryRatio: number;
+  sellerRecoveryRatio: number;
+  buyerRecoveryTrend: number;
+  sellerRecoveryTrend: number;
+  buyerRecoverySpeed: number;
+  sellerRecoverySpeed: number;
+  bullishConfirmation: number;
+  bearishConfirmation: number;
+  lowerWickRejection: number;
+  upperWickRejection: number;
+}
+
+interface BehavioralLayerResult {
+  context: MarketBehaviorContext;
+  scores: BehavioralStateScores;
+  signals: BehavioralSignal[];
+  lowerLowFailure: number;
+  higherHighFailure: number;
+  failedBreakdown: number;
+  failedBreakout: number;
+  ema25Reclaim: boolean;
+  ema25Rejection: boolean;
+}
+
+/**
+ * Builds the behavioral layer from trajectories and structural events. The
+ * final UI numbers are outputs of this layer, never inputs to one another.
+ * Futures context is intentionally marked unavailable until the scanner owns a
+ * synchronized futures feed; candle volume must not masquerade as OI/funding.
+ */
+function behavioralLayer(input: BehavioralLayerInput): BehavioralLayerResult {
+  const { candles, window } = input;
+  const current = candles.at(-1)!;
+  const previous = candles.at(-2)!;
+  const currentAtr = Math.max(atr(candles), Number.EPSILON);
+  const fastCount = Math.max(3, Math.ceil(window / 2));
+  const structuralCount = Math.max(20, window * 4);
+  const structural = candles.slice(-(structuralCount + fastCount));
+  const reference = structural.slice(0, -fastCount);
+  const recent = structural.slice(-fastCount);
+  const support = Math.min(...reference.map((candle) => candle.low));
+  const resistance = Math.max(...reference.map((candle) => candle.high));
+  const recentLow = Math.min(...recent.map((candle) => candle.low));
+  const recentHigh = Math.max(...recent.map((candle) => candle.high));
+
+  const lowTest = clamp(1 - Math.abs(recentLow - support) / currentAtr / 1.25);
+  const highTest = clamp(
+    1 - Math.abs(recentHigh - resistance) / currentAtr / 1.25,
+  );
+  const lowerLowHeld = recentLow >= support - 0.15 * currentAtr ? 1 : 0;
+  const higherHighHeld = recentHigh <= resistance + 0.15 * currentAtr ? 1 : 0;
+  const lowerLowFailure = score(
+    input.sellerPressure / 100 * lowTest *
+      (0.45 * lowerLowHeld + 0.30 * clamp(-input.downsideProgressTrend / 35) +
+        0.25 * clamp(-input.downsideResponseTrend / 35)),
+  );
+  const higherHighFailure = score(
+    input.buyerPressure / 100 * highTest *
+      (0.45 * higherHighHeld + 0.30 * clamp(-input.upsideProgressTrend / 35) +
+        0.25 * clamp(-input.upsideResponseTrend / 35)),
+  );
+
+  const brokeSupport = recentLow < support - 0.05 * currentAtr;
+  const reclaimedSupport = current.close > support;
+  const reclaimMagnitude = clamp((current.close - support) / currentAtr / 0.75);
+  const closeLocation = clamp(
+    (current.close - current.low) /
+      Math.max(current.high - current.low, Number.EPSILON),
+  );
+  const failedBreakdown = brokeSupport && reclaimedSupport
+    ? score(
+      0.30 * input.sellerPressure / 100 +
+        0.25 * reclaimMagnitude +
+        0.20 * input.lowerWickRejection +
+        0.25 * closeLocation,
+    )
+    : 0;
+
+  const brokeResistance = recentHigh > resistance + 0.05 * currentAtr;
+  const rejectedResistance = current.close < resistance;
+  const rejectionMagnitude = clamp(
+    (resistance - current.close) / currentAtr / 0.75,
+  );
+  const bearishCloseLocation = 1 - closeLocation;
+  const failedBreakout = brokeResistance && rejectedResistance
+    ? score(
+      0.30 * input.buyerPressure / 100 +
+        0.25 * rejectionMagnitude +
+        0.20 * input.upperWickRejection +
+        0.25 * bearishCloseLocation,
+    )
+    : 0;
+
+  const closes = candles.map((candle) => candle.close);
+  const ema25Now = ema(closes, 25);
+  const ema25Before = ema(closes.slice(0, -1), 25);
+  const ema99Now = ema(closes, 99);
+  const ema99Before = ema(closes.slice(0, -Math.min(window, 5)), 99);
+  const ema25Reclaim = previous.close <= ema25Before &&
+    current.close > ema25Now;
+  const ema25Rejection = previous.close >= ema25Before &&
+    current.close < ema25Now;
+  const ema25DeltaAtr = (ema25Now - ema25Before) / currentAtr;
+  const ema25Trend: MarketBehaviorContext["ema25Trend"] = ema25DeltaAtr > 0.03
+    ? "rising"
+    : ema25DeltaAtr < -0.03
+    ? "falling"
+    : "flat";
+  const regime: MarketBehaviorContext["regime"] = current.close > ema25Now &&
+      ema25Now > ema99Now && ema99Now >= ema99Before
+    ? "bullish"
+    : current.close < ema25Now && ema25Now < ema99Now && ema99Now <= ema99Before
+    ? "bearish"
+    : "range";
+  const context: MarketBehaviorContext = {
+    regime,
+    priceVsEma25: current.close >= ema25Now ? "above" : "below",
+    priceVsEma99: current.close >= ema99Now ? "above" : "below",
+    ema25Trend,
+    futuresAvailability: "unavailable",
+    summary: regime === "bullish"
+      ? "Price and the medium structure are above EMA99."
+      : regime === "bearish"
+      ? "Price and the medium structure are below EMA99."
+      : "The broader structure is mixed around EMA25 and EMA99.",
+  };
+
+  const efficiencyDecay = (trend: number) => score(clamp(-trend / 40));
+  const progressDecay = (trend: number) => score(clamp(-trend / 40));
+  const pressureDivergence = (
+    pressureTrend: number,
+    responseTrend: number,
+    efficiencyTrend: number,
+  ) =>
+    score(
+      0.45 * clamp(pressureTrend / 35) +
+        0.30 * clamp(-responseTrend / 35) +
+        0.25 * clamp(-efficiencyTrend / 35),
+    );
+  const sellerFailureDivergence = pressureDivergence(
+    input.sellerPressureTrend,
+    input.downsideResponseTrend,
+    input.sellerEfficiencyTrend,
+  );
+  const buyerFailureDivergence = pressureDivergence(
+    input.buyerPressureTrend,
+    input.upsideResponseTrend,
+    input.buyerEfficiencyTrend,
+  );
+  const downsideProgressWeakening = score(
+    input.sellerPressure / 100 * clamp(-input.downsideProgressTrend / 35),
+  );
+  const upsideProgressWeakening = score(
+    input.buyerPressure / 100 * clamp(-input.upsideProgressTrend / 35),
+  );
+  const buyerRecoveryStrengthening = score(
+    0.45 * input.buyerRecoveryRatio / 100 +
+      0.30 * clamp(input.buyerRecoveryTrend / 35) +
+      0.25 * input.buyerRecoverySpeed / 100,
+  );
+  const sellerRecoveryStrengthening = score(
+    0.45 * input.sellerRecoveryRatio / 100 +
+      0.30 * clamp(input.sellerRecoveryTrend / 35) +
+      0.25 * input.sellerRecoverySpeed / 100,
+  );
+
+  const sellerExhaustion = Math.round(
+    0.20 * efficiencyDecay(input.sellerEfficiencyTrend) +
+      0.20 * progressDecay(input.downsideProgressTrend) +
+      0.15 * sellerFailureDivergence +
+      0.15 * lowerLowFailure +
+      0.10 * input.buySideAbsorption +
+      0.10 * buyerRecoveryStrengthening +
+      0.10 * Math.max(failedBreakdown, score(input.lowerWickRejection)),
+  );
+  const buyerExhaustion = Math.round(
+    0.20 * efficiencyDecay(input.buyerEfficiencyTrend) +
+      0.20 * progressDecay(input.upsideProgressTrend) +
+      0.15 * buyerFailureDivergence +
+      0.15 * higherHighFailure +
+      0.10 * input.sellSideAbsorption +
+      0.10 * sellerRecoveryStrengthening +
+      0.10 * Math.max(failedBreakout, score(input.upperWickRejection)),
+  );
+  const buyerStructure = Math.max(
+    failedBreakdown,
+    input.bullishConfirmation,
+    ema25Reclaim ? 75 : 0,
+  );
+  const sellerStructure = Math.max(
+    failedBreakout,
+    input.bearishConfirmation,
+    ema25Rejection ? 75 : 0,
+  );
+  const buyerResponse = Math.round(
+    0.20 * score(clamp(input.buyerPressureTrend / 35)) +
+      0.20 * score(clamp(input.buyerEfficiencyTrend / 35)) +
+      0.20 * buyerRecoveryStrengthening +
+      0.15 * input.buyerRecoverySpeed +
+      0.15 * buyerStructure +
+      0.10 * input.upsideResponse,
+  );
+  const sellerResponse = Math.round(
+    0.20 * score(clamp(input.sellerPressureTrend / 35)) +
+      0.20 * score(clamp(input.sellerEfficiencyTrend / 35)) +
+      0.20 * sellerRecoveryStrengthening +
+      0.15 * input.sellerRecoverySpeed +
+      0.15 * sellerStructure +
+      0.10 * input.downsideResponse,
+  );
+  const bullishExpansion = Math.round(
+    0.35 * input.buyerPressure + 0.35 * input.buyerEfficiency +
+      0.30 * input.upsideResponse,
+  );
+  const bearishExpansion = Math.round(
+    0.35 * input.sellerPressure + 0.35 * input.sellerEfficiency +
+      0.30 * input.downsideResponse,
+  );
+  const scores: BehavioralStateScores = {
+    sellerExhaustion,
+    buyerExhaustion,
+    buyerResponse,
+    sellerResponse,
+    bullishExpansion,
+    bearishExpansion,
+  };
+
+  const signals: BehavioralSignal[] = [];
+  const add = (
+    kind: BehavioralSignalKind,
+    value: number,
+    direction: BehavioralSignal["direction"],
+    evidence: string[],
+    confirmed = false,
+  ) => {
+    if (value < 45) return;
+    signals.push({
+      kind,
+      score: value,
+      direction,
+      status: confirmed ? "confirmed" : "developing",
+      trend: value >= 65 ? "rising" : "flat",
+      evidence,
+    });
+  };
+  add("lower_low_failure", lowerLowFailure, "bullish", [
+    "seller_pressure_present",
+    "no_meaningful_new_low",
+  ]);
+  add("higher_high_failure", higherHighFailure, "bearish", [
+    "buyer_pressure_present",
+    "no_meaningful_new_high",
+  ]);
+  add("downside_progress_weakening", downsideProgressWeakening, "bullish", [
+    "downside_extensions_shrinking",
+  ]);
+  add("upside_progress_weakening", upsideProgressWeakening, "bearish", [
+    "upside_extensions_shrinking",
+  ]);
+  add("sell_pressure_downside_divergence", sellerFailureDivergence, "bullish", [
+    "seller_pressure_rising",
+    "downside_response_falling",
+  ]);
+  add("buy_pressure_upside_divergence", buyerFailureDivergence, "bearish", [
+    "buyer_pressure_rising",
+    "upside_response_falling",
+  ]);
+  add("failed_breakdown", failedBreakdown, "bullish", [
+    "support_broken",
+    "support_reclaimed",
+  ], failedBreakdown >= 60);
+  add("failed_breakout", failedBreakout, "bearish", [
+    "resistance_broken",
+    "resistance_rejected",
+  ], failedBreakout >= 60);
+  add("buyer_recovery_strengthening", buyerRecoveryStrengthening, "bullish", [
+    "recovery_ratio_rising",
+    "recovery_speed_measured",
+  ]);
+  add("seller_recovery_strengthening", sellerRecoveryStrengthening, "bearish", [
+    "recovery_ratio_rising",
+    "recovery_speed_measured",
+  ]);
+  add("seller_exhaustion", sellerExhaustion, "bullish", [
+    "seller_efficiency_falling",
+    "downside_progress_falling",
+  ]);
+  add("buyer_exhaustion", buyerExhaustion, "bearish", [
+    "buyer_efficiency_falling",
+    "upside_progress_falling",
+  ]);
+  const buyerTakeover = sellerExhaustion >= 65 && buyerResponse >= 60 &&
+    buyerStructure >= 50;
+  const sellerTakeover = buyerExhaustion >= 65 && sellerResponse >= 60 &&
+    sellerStructure >= 50;
+  if (buyerTakeover) {
+    add(
+      "buyer_takeover",
+      Math.round(average([
+        sellerExhaustion,
+        buyerResponse,
+        buyerStructure,
+      ])),
+      "bullish",
+      [
+        "seller_exhaustion",
+        "buyer_response",
+        "structure_reclaimed",
+      ],
+      true,
+    );
+  }
+  if (sellerTakeover) {
+    add(
+      "seller_takeover",
+      Math.round(average([
+        buyerExhaustion,
+        sellerResponse,
+        sellerStructure,
+      ])),
+      "bearish",
+      [
+        "buyer_exhaustion",
+        "seller_response",
+        "structure_broken",
+      ],
+      true,
+    );
+  }
+  signals.sort((left, right) =>
+    Number(right.status === "confirmed") -
+      Number(left.status === "confirmed") ||
+    right.score - left.score
+  );
+
+  return {
+    context,
+    scores,
+    signals,
+    lowerLowFailure,
+    higherHighFailure,
+    failedBreakdown,
+    failedBreakout,
+    ema25Reclaim,
+    ema25Rejection,
+  };
+}
+
 export function marketStateObservation(
   candles: MarketCandle[],
   timeframe: string,
@@ -795,6 +1285,52 @@ export function marketStateObservation(
       rank((value) => value.buyPressureRaw, item.value.buyPressureRaw)
     ),
   ));
+  const downsideProgressTrend = bounded(trendOf(
+    recentTail.map((item) =>
+      rank((value) => value.newLowProgressAtr, item.value.newLowProgressAtr)
+    ),
+  ));
+  const upsideProgressTrend = bounded(trendOf(
+    recentTail.map((item) =>
+      rank((value) => value.newHighProgressAtr, item.value.newHighProgressAtr)
+    ),
+  ));
+  const downsideResponseTrend = bounded(trendOf(
+    recentTail.map((item) =>
+      rank((value) => value.downResponseRaw, item.value.downResponseRaw)
+    ),
+  ));
+  const upsideResponseTrend = bounded(trendOf(
+    recentTail.map((item) =>
+      rank((value) => value.upResponseRaw, item.value.upResponseRaw)
+    ),
+  ));
+  const buyerRecoveryRatio = rank(
+    (value) => value.buyerRecoveryRatio,
+    current.buyerRecoveryRatio,
+  );
+  const sellerRecoveryRatio = rank(
+    (value) => value.sellerRecoveryRatio,
+    current.sellerRecoveryRatio,
+  );
+  const buyerRecoverySpeed = rank(
+    (value) => value.buyerRecoverySpeed,
+    current.buyerRecoverySpeed,
+  );
+  const sellerRecoverySpeed = rank(
+    (value) => value.sellerRecoverySpeed,
+    current.sellerRecoverySpeed,
+  );
+  const buyerRecoveryTrend = bounded(trendOf(
+    recentTail.map((item) =>
+      rank((value) => value.buyerRecoveryRatio, item.value.buyerRecoveryRatio)
+    ),
+  ));
+  const sellerRecoveryTrend = bounded(trendOf(
+    recentTail.map((item) =>
+      rank((value) => value.sellerRecoveryRatio, item.value.sellerRecoveryRatio)
+    ),
+  ));
 
   const absorptionOf = (
     pressure: number,
@@ -804,13 +1340,15 @@ export function marketStateObservation(
     wick: number,
   ) => {
     const gate = clamp((pressure - 45) / 35);
-    return score(gate * (
-      0.35 * (pressure / 100) +
-      0.25 * (1 - efficiency / 100) +
-      0.20 * clamp(-trend / 35) +
-      0.12 * divergence +
-      0.08 * wick
-    ));
+    return score(
+      gate * (
+        0.35 * (pressure / 100) +
+        0.25 * (1 - efficiency / 100) +
+        0.20 * clamp(-trend / 35) +
+        0.12 * divergence +
+        0.08 * wick
+      ),
+    );
   };
   const buySideAbsorption = absorptionOf(
     sellerPressure,
@@ -840,8 +1378,6 @@ export function marketStateObservation(
       0.20 * Number(current.ema7Loss),
   );
 
-
-
   // Location carries the most weight: a turn happens at an extreme, not in the
   // middle of a range. Compression and the rejection wick then say whether the
   // extreme is coiling or being defended.
@@ -862,6 +1398,37 @@ export function marketStateObservation(
     buyerPressure / 100 * (1 - upsideResponse / 100),
   );
 
+  const behavior = behavioralLayer({
+    candles,
+    window,
+    sellerPressure,
+    buyerPressure,
+    sellerEfficiency,
+    buyerEfficiency,
+    downsideResponse,
+    upsideResponse,
+    buySideAbsorption,
+    sellSideAbsorption,
+    sellerEfficiencyTrend,
+    buyerEfficiencyTrend,
+    sellerPressureTrend,
+    buyerPressureTrend,
+    downsideProgressTrend,
+    upsideProgressTrend,
+    downsideResponseTrend,
+    upsideResponseTrend,
+    buyerRecoveryRatio,
+    sellerRecoveryRatio,
+    buyerRecoveryTrend,
+    sellerRecoveryTrend,
+    buyerRecoverySpeed,
+    sellerRecoverySpeed,
+    bullishConfirmation,
+    bearishConfirmation,
+    lowerWickRejection: current.lowerWickRejection,
+    upperWickRejection: current.upperWickRejection,
+  });
+
   const metrics = {
     sellerPressure,
     buyerPressure,
@@ -878,7 +1445,32 @@ export function marketStateObservation(
     bullishConfirmation,
     bearishConfirmation,
   };
-  const classification = classifyMarketState(metrics, previousState);
+  let classification = classifyMarketState(metrics, previousState);
+  const confirmedTransition = behavior.signals.find((signal) =>
+    signal.status === "confirmed" &&
+    (signal.kind === "buyer_takeover" || signal.kind === "seller_takeover")
+  );
+  if (confirmedTransition?.kind === "buyer_takeover") {
+    classification = {
+      state: "buyer_takeover",
+      stateScore: confirmedTransition.score,
+    };
+  } else if (confirmedTransition?.kind === "seller_takeover") {
+    classification = {
+      state: "seller_takeover",
+      stateScore: confirmedTransition.score,
+    };
+  } else if (behavior.scores.sellerExhaustion >= 65) {
+    classification = {
+      state: "seller_exhaustion",
+      stateScore: behavior.scores.sellerExhaustion,
+    };
+  } else if (behavior.scores.buyerExhaustion >= 65) {
+    classification = {
+      state: "buyer_exhaustion",
+      stateScore: behavior.scores.buyerExhaustion,
+    };
+  }
 
   return {
     ...classification,
@@ -887,6 +1479,9 @@ export function marketStateObservation(
     rolloverReadiness,
     buyerResilience,
     sellerResilience,
+    context: behavior.context,
+    behavioralScores: behavior.scores,
+    behavioralSignals: behavior.signals,
     candleCloseTime: candles[currentIndex].closeTime,
     scoringVersion: MARKET_STATE_SCORING_VERSION,
     features: {
@@ -917,6 +1512,22 @@ export function marketStateObservation(
       bearishBody: round(current.bearishBody),
       ema7Reclaim: current.ema7Reclaim,
       ema7Loss: current.ema7Loss,
+      downsideProgressTrend,
+      upsideProgressTrend,
+      downsideResponseTrend,
+      upsideResponseTrend,
+      buyerRecoveryRatio,
+      sellerRecoveryRatio,
+      buyerRecoveryTrend,
+      sellerRecoveryTrend,
+      buyerRecoverySpeed,
+      sellerRecoverySpeed,
+      lowerLowFailure: behavior.lowerLowFailure,
+      higherHighFailure: behavior.higherHighFailure,
+      failedBreakdown: behavior.failedBreakdown,
+      failedBreakout: behavior.failedBreakout,
+      ema25Reclaim: behavior.ema25Reclaim,
+      ema25Rejection: behavior.ema25Rejection,
     },
   };
 }

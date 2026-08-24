@@ -263,6 +263,9 @@ async function persistMarketState(
     buyer_pressure_trend: observation.buyerPressureTrend,
     scoring_version: observation.scoringVersion,
     raw_features: observation.features,
+    market_context: observation.context,
+    behavioral_scores: observation.behavioralScores,
+    behavioral_signals: observation.behavioralSignals,
     close_price: candles.at(-1)?.close ?? null,
     quote_volume_24h: quoteVolume24h,
   };

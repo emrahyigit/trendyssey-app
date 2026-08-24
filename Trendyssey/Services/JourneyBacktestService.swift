@@ -90,6 +90,7 @@ actor JourneyBacktestService {
                             marketState: nil,
                             marketStateScore: nil,
                             marketStateChange: nil,
+                            behavioralSignal: nil,
                             falseBreakoutRisk: max(0, 100 - analysis.confidence),
                             volumeRatio: analysis.volumeRatio,
                             quoteVolume24h: volumeBySymbol[symbol] ?? 0,

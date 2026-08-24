@@ -44,30 +44,40 @@ struct FeaturedSignalCard: View {
                     }
                 }
                 if let state = signal.marketState {
-                    MarketStateChip(snapshot: state)
+                    if let behavioral = state.leadingBehavioralSignal {
+                        BehavioralSignalChip(signal: behavioral)
+                    } else {
+                        Label(
+                            L10n.text("No distinct transition", "Belirgin geçiş yok"),
+                            systemImage: "waveform.path"
+                        )
+                        .font(.caption2.bold())
+                        .foregroundStyle(TrendysseyColor.secondaryText)
+                    }
                 }
                 HStack(alignment: .bottom) {
                     if let state = signal.marketState {
+                        let leadingSignal = state.leadingBehavioralSignal
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(state.hasActiveState
-                                 ? L10n.text("STATE STRENGTH", "DURUM GÜCÜ")
-                                 : L10n.text("CURRENT STATE", "GÜNCEL DURUM"))
+                            Text(leadingSignal != nil
+                                 ? L10n.text("SIGNAL STRENGTH", "SİNYAL GÜCÜ")
+                                 : L10n.text("BEHAVIOR", "DAVRANIŞ"))
                                 .font(.caption2.bold()).foregroundStyle(TrendysseyColor.secondaryText)
-                            if state.hasActiveState {
+                            if let leadingSignal {
                                 // 52pt with a "/ 100" tail made a three-digit
                                 // score both too wide and too tall for the
                                 // carousel to hold, and the card clipped. The
                                 // label above already says this is a strength,
                                 // so the denominator was spending space to
                                 // repeat itself.
-                                Text("\(state.stateScore)")
+                                Text("\(leadingSignal.score)")
                                     .font(.system(size: 34, weight: .bold, design: .rounded))
                                     .monospacedDigit()
-                                    .foregroundStyle(state.state.color)
+                                    .foregroundStyle(leadingSignal.direction.color)
                                     .lineLimit(1)
                                     .minimumScaleFactor(0.6)
                             } else {
-                                Text(L10n.text("No active state", "Aktif durum yok"))
+                                Text(L10n.text("Watching", "İzleniyor"))
                                     .font(.title2.bold())
                                     .foregroundStyle(TrendysseyColor.secondaryText)
                             }
@@ -130,6 +140,45 @@ struct StateScoreBadge: View {
     }
 }
 
+struct BehavioralSignalChip: View {
+    let signal: BehavioralSignal
+
+    var body: some View {
+        Label(
+            signal.kind.title,
+            systemImage: signal.status == .confirmed ? "checkmark.seal.fill" : "waveform.path.ecg"
+        )
+        .font(.caption2.bold())
+        .foregroundStyle(signal.direction.color)
+        .lineLimit(1)
+        .minimumScaleFactor(0.72)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(signal.direction.color.opacity(0.12), in: Capsule())
+        .accessibilityLabel("\(signal.kind.title), \(signal.score) / 100")
+    }
+}
+
+private struct BehavioralSignalScoreBadge: View {
+    let signal: BehavioralSignal
+
+    var body: some View {
+        HStack(spacing: 3) {
+            Image(systemName: signal.status == .confirmed ? "checkmark.seal.fill" : "waveform.path.ecg")
+                .font(.system(size: 8, weight: .bold))
+            Text("\(signal.score)")
+                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .monospacedDigit()
+        }
+        .lineLimit(1)
+        .fixedSize()
+        .foregroundStyle(signal.direction.color)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 3)
+        .background(signal.direction.color.opacity(0.14), in: Capsule())
+    }
+}
+
 struct SignalRow: View {
     let signal: MarketSignal
     /// The scanner lists every coin for lookup, so it does not pitch setups.
@@ -142,15 +191,17 @@ struct SignalRow: View {
                 HStack(spacing: 6) {
                     Text(signal.baseSymbol).font(.headline)
                         .lineLimit(1).minimumScaleFactor(0.7).layoutPriority(1)
-                    if let state = signal.marketState, state.hasActiveState {
-                        StateScoreBadge(snapshot: state)
+                    if let state = signal.marketState, let behavioral = state.leadingBehavioralSignal {
+                        BehavioralSignalScoreBadge(signal: behavioral)
                     }
                     if showsAPlus, signal.isAPlusSetup { APlusSetupBadge() }
                 }
-                if signal.hasScore {
-                    Text(signal.marketState?.state.title ?? L10n.text("State updating", "Durum güncelleniyor"))
+                if let snapshot = signal.marketState {
+                    Text(snapshot.leadingBehavioralSignal?.kind.title
+                         ?? L10n.text("No distinct transition", "Belirgin geçiş yok"))
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(signal.marketState?.state.color ?? TrendysseyColor.secondaryText)
+                        .foregroundStyle(snapshot.leadingBehavioralSignal?.direction.color
+                                         ?? TrendysseyColor.secondaryText)
                         .lineLimit(1).minimumScaleFactor(0.8)
                 } else {
                     Label(L10n.text("Not enough volume to analyze", "Analiz için yeterli hacim yok"), systemImage: "antenna.radiowaves.left.and.right.slash")

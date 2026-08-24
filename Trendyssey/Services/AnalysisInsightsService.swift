@@ -76,6 +76,9 @@ struct BreakoutScenarioEntry: Identifiable, Sendable {
     let marketState: MarketStateKind?
     let marketStateScore: Int?
     let marketStateChange: Int?
+    /// The concrete behavioral event that opened this hypothetical position.
+    /// Market state is retained above only as broad decision-time context.
+    let behavioralSignal: BehavioralSignal?
     let falseBreakoutRisk: Int
     let volumeRatio: Double
     /// The coin's 24h quote volume, so the page's minimum-volume filter can
@@ -246,6 +249,7 @@ struct BreakoutScenarioEntry: Identifiable, Sendable {
             marketState: marketState,
             marketStateScore: marketStateScore,
             marketStateChange: marketStateChange,
+            behavioralSignal: behavioralSignal,
             falseBreakoutRisk: falseBreakoutRisk,
             volumeRatio: volumeRatio,
             quoteVolume24h: quoteVolume24h,
@@ -286,9 +290,14 @@ actor AnalysisInsightsService {
     private struct ScenarioStateRow: Decodable, Sendable {
         let symbol_id: UUID
         let symbol: String
+        let behavior_kind: BehavioralSignalKind
+        let behavior_score: Int
+        let behavior_direction: BehavioralDirection
+        let behavior_status: BehavioralSignalStatus
+        let behavior_trend: BehavioralTrend
+        let behavior_evidence: [String]
         let state: MarketStateKind
         let state_score: Int
-        let state_score_change: Int?
         let candle_close_time: String
         let close_price: Double?
         let quote_volume_24h: Double?
@@ -299,7 +308,7 @@ actor AnalysisInsightsService {
         lookback: ScenarioLookback
     ) async throws -> BreakoutScenarioResult {
         let allRows: [ScenarioStateRow] = try await rpc(
-            "market_state_scenario_entries",
+            "behavioral_scenario_entries",
             body: [
                 "p_timeframe": timeframe,
                 "p_since": Self.iso8601(lookback.since),
@@ -349,17 +358,27 @@ actor AnalysisInsightsService {
                         return BreakoutScenarioEntry(
                             id: UUID(),
                             symbol: symbol,
-                            direction: .bullish,
+                            direction: row.behavior_direction == .bearish ? .bearish : .bullish,
                             regimeScore: 0,
                             readinessScore: 0,
                             breakoutQualityScore: row.state_score,
                             confirmationScore: row.state_score,
                             relativeStrengthScore: nil,
                             trendScore: nil,
-                            trendEntry: row.state == .buyerTakeover && row.state_score >= MarketStateSnapshot.aPlusMinimumScore,
+                            trendEntry: row.behavior_kind == .buyerTakeover
+                                && row.behavior_status == .confirmed
+                                && row.behavior_score >= MarketStateSnapshot.aPlusMinimumScore,
                             marketState: row.state,
                             marketStateScore: row.state_score,
-                            marketStateChange: row.state_score_change,
+                            marketStateChange: nil,
+                            behavioralSignal: BehavioralSignal(
+                                kind: row.behavior_kind,
+                                score: row.behavior_score,
+                                direction: row.behavior_direction,
+                                status: row.behavior_status,
+                                trend: row.behavior_trend,
+                                evidence: row.behavior_evidence
+                            ),
                             falseBreakoutRisk: 0,
                             volumeRatio: 0,
                             quoteVolume24h: row.quote_volume_24h ?? 0,

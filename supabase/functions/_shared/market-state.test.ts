@@ -182,7 +182,7 @@ Deno.test("forming candle is outside the engine contract", () => {
   const candles = baseline(170);
   const result = marketStateObservation(candles, "4h")!;
   assertEquals(result.candleCloseTime, candles.at(-1)!.closeTime);
-  assertEquals(result.scoringVersion, "market-state-v6-evidence");
+  assertEquals(result.scoringVersion, "market-state-v7-behavioral");
 });
 
 Deno.test("market-state window adapts to every supported timeframe", () => {
@@ -388,10 +388,14 @@ Deno.test("every state scores on the same scale", () => {
   // state it is. Before this, dominance averaged 90 and absorption could not
   // pass 93, so one threshold could never mean the same thing twice.
   const barelyDominant = inertMetrics({
-    sellerPressure: 60, downsideResponse: 50, sellerEfficiency: 50,
+    sellerPressure: 60,
+    downsideResponse: 50,
+    sellerEfficiency: 50,
   });
   const barelyAbsorbing = inertMetrics({
-    sellerPressure: 55, sellerEfficiency: 45, buySideAbsorption: 55,
+    sellerPressure: 55,
+    sellerEfficiency: 45,
+    buySideAbsorption: 55,
   });
   for (const metrics of [barelyDominant, barelyAbsorbing]) {
     const { stateScore } = classifyMarketState(metrics, "buy_side_absorption");
@@ -402,7 +406,9 @@ Deno.test("every state scores on the same scale", () => {
   }
 
   const emphatic = classifyMarketState(inertMetrics({
-    sellerPressure: 100, downsideResponse: 100, sellerEfficiency: 100,
+    sellerPressure: 100,
+    downsideResponse: 100,
+    sellerEfficiency: 100,
   }));
   assertEquals(emphatic.state, "seller_dominance");
   assertEquals(emphatic.stateScore, 100);
@@ -420,9 +426,37 @@ Deno.test("a thin market that still moves price is not quiet", () => {
   });
   assert(classifyMarketState(thinButMoving).state !== "low_participation");
 
-  const genuinelyAsleep = inertMetrics({ sellerPressure: 14, buyerPressure: 31 });
+  const genuinelyAsleep = inertMetrics({
+    sellerPressure: 14,
+    buyerPressure: 31,
+  });
   assertEquals(
     classifyMarketState(genuinelyAsleep).state,
     "low_participation",
   );
+});
+
+Deno.test("behavioral output separates context, simultaneous states and signals", () => {
+  const candles = baseline();
+  let close = candles.at(-1)!.close;
+  for (let offset = 0; offset < 10; offset += 1) {
+    close -= offset < 6 ? 0.75 : 0.08;
+    candles.push(candle(candles.length, close, {
+      open: close + 0.25,
+      low: close - (offset < 6 ? 0.35 : 0.08),
+      quote: 2_800_000,
+      buyRatio: 0.24,
+    }));
+  }
+  const result = marketStateObservation(candles, "4h")!;
+  assert(["bullish", "bearish", "range"].includes(result.context.regime));
+  assertEquals(result.context.futuresAvailability, "unavailable");
+  for (const value of Object.values(result.behavioralScores)) {
+    assert(value >= 0 && value <= 100, `behavior score out of range: ${value}`);
+  }
+  for (const signal of result.behavioralSignals) {
+    assert(signal.score >= 45 && signal.score <= 100);
+    assert(signal.evidence.length > 0);
+    assert(signal.kind !== "spot_futures_divergence");
+  }
 });

@@ -1,8 +1,7 @@
 import SwiftUI
 
-/// Read-only window onto the trade executor: the parameters it runs with and
-/// every order it has touched, newest first. The app never places or cancels
-/// orders — the backend cron owns the trading loop.
+/// Behavior-first window onto the backend-owned executor. Weakening is
+/// observed, structure confirms, and only then may the backend act.
 struct LiveTradesView: View {
     @State private var config: TradeExecutorConfig?
     @State private var trades: [LiveTrade] = []
@@ -13,69 +12,64 @@ struct LiveTradesView: View {
     @State private var isResetting = false
     @State private var resetFailed = false
 
-    private var openTrades: [LiveTrade] { trades.filter { $0.status == "open" || $0.status == "pending_entry" } }
+    private var openTrades: [LiveTrade] {
+        trades.filter { $0.status == "open" || $0.status == "pending_entry" }
+    }
+    private var historyTrades: [LiveTrade] {
+        let openIDs = Set(openTrades.map(\.id))
+        return trades.filter { !openIDs.contains($0.id) }
+    }
     private var closedTrades: [LiveTrade] { trades.filter { $0.status == "closed" } }
     private var realizedPnl: Double { closedTrades.compactMap(\.realizedQuotePnl).reduce(0, +) }
     private var unrealizedPnl: Double {
         openTrades.compactMap { $0.unrealizedPnl(currentPrice: currentPrices[$0.symbol]) }.reduce(0, +)
     }
+    private var wins: Int { closedTrades.filter { ($0.realizedQuotePnl ?? 0) > 0 }.count }
+    private var capitalAtWork: Double {
+        openTrades.reduce(0) { $0 + ($1.entryPrice ?? 0) * ($1.entryQuantity ?? 0) }
+    }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                if let config { configCard(config) }
+                hero
+                if let config {
+                    decisionContract(config)
+                    behaviorPath(config)
+                }
                 if config?.resetRequested == true {
-                    noticeCard(
-                        L10n.text(
-                            "Reset requested — the executor unwinds and clears everything within a minute.",
-                            "Sıfırlama istendi — işlemci bir dakika içinde her şeyi kapatıp temizleyecek."
-                        ),
-                        icon: "arrow.counterclockwise.circle"
-                    )
+                    notice(L10n.text(
+                        "Reset queued. Positions will be unwound on the next executor pass.",
+                        "Sıfırlama sırada. Pozisyonlar işlemcinin sonraki turunda kapatılacak."
+                    ), icon: "arrow.counterclockwise.circle")
                 }
                 if resetFailed {
-                    noticeCard(
-                        L10n.text("Reset request failed. Try again.", "Sıfırlama isteği gönderilemedi. Yeniden dene."),
-                        icon: "exclamationmark.triangle"
-                    )
+                    notice(L10n.text("Reset request failed. Try again.", "Sıfırlama isteği gönderilemedi. Yeniden dene."), icon: "exclamationmark.triangle")
                 }
-                summaryCard
-                if let firstError = trades.first(where: { $0.status == "error" || $0.errorMessage != nil }) {
-                    noticeCard(
-                        L10n.text(
-                            "Last issue · \(firstError.symbol): \(firstError.errorMessage ?? "unknown")",
-                            "Son sorun · \(firstError.symbol): \(firstError.errorMessage ?? "bilinmiyor")"
-                        ),
-                        icon: "exclamationmark.triangle"
-                    )
+                portfolioPulse
+                if let issue = trades.first(where: { $0.status == "error" || $0.errorMessage != nil }) {
+                    notice(L10n.text(
+                        "Last issue · \(issue.symbol): \(issue.errorMessage ?? "unknown")",
+                        "Son sorun · \(issue.symbol): \(issue.errorMessage ?? "bilinmiyor")"
+                    ), icon: "exclamationmark.triangle")
                 }
-                tradeList
+                ledger
+                resetAction
             }
             .padding(18)
         }
         .background(TrendysseyColor.canvas.ignoresSafeArea())
-        .navigationTitle(L10n.text("Auto Trader", "Otomatik İşlemler"))
+        .navigationTitle(L10n.text("Behavior Auto Trader", "Davranış Otomasyonu"))
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button(role: .destructive) {
-                    isConfirmingReset = true
-                } label: {
-                    if isResetting { ProgressView() }
-                    else { Text(L10n.text("Reset", "Sıfırla")).font(.subheadline.weight(.semibold)) }
-                }
-                .disabled(isResetting || config?.resetRequested == true)
-            }
-        }
         .confirmationDialog(
             L10n.text(
-                "Close every position and wipe the trade history? The executor sells open holdings at market on its next run.",
-                "Tüm pozisyonlar kapatılıp işlem geçmişi silinsin mi? İşlemci bir sonraki turunda açık pozisyonları piyasadan satar."
+                "Close every position and clear the ledger? Open holdings are sold at market on the next executor pass.",
+                "Tüm pozisyonlar kapatılıp kayıtlar temizlensin mi? Açık varlıklar sonraki turda piyasadan satılır."
             ),
             isPresented: $isConfirmingReset,
             titleVisibility: .visible
         ) {
-            Button(L10n.text("Reset auto trader", "Otomatik işlemleri sıfırla"), role: .destructive) {
+            Button(L10n.text("Reset auto trader", "Otomasyonu sıfırla"), role: .destructive) {
                 Task { await requestReset() }
             }
         }
@@ -83,265 +77,290 @@ struct LiveTradesView: View {
         .refreshable { await load() }
     }
 
-    // MARK: - Cards
+    private var hero: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label(L10n.text("BEHAVIOR EXECUTION", "DAVRANIŞ YÜRÜTME"), systemImage: "point.3.connected.trianglepath.dotted")
+                    .font(.caption.bold()).foregroundStyle(TrendysseyColor.accent)
+                Spacer()
+                if let config {
+                    pill(config.enabled ? L10n.text("RUNNING", "ÇALIŞIYOR") : L10n.text("PAUSED", "DURDU"), tint: config.enabled ? TrendysseyColor.positive : TrendysseyColor.secondaryText)
+                }
+            }
+            Text(L10n.text("Acts only after behavior becomes evidence.", "Yalnızca davranış kanıta dönüştüğünde hareket eder."))
+                .font(.title2.bold())
+            Text(L10n.text(
+                "Exhaustion is an observation, not an entry. The executor waits for the selected behavior, evidence floor and structural confirmation.",
+                "Tükeniş bir gözlemdir, giriş değildir. İşlemci seçili davranışı, kanıt tabanını ve yapısal teyidi bekler."
+            ))
+            .font(.subheadline).foregroundStyle(TrendysseyColor.secondaryText).lineSpacing(3)
+        }
+    }
 
-    private func configCard(_ config: TradeExecutorConfig) -> some View {
+    private func decisionContract(_ config: TradeExecutorConfig) -> some View {
+        let kinds = config.allowedBehaviorSignals ?? [.buyerTakeover]
+        let minimum = config.minimumBehaviorScore ?? 60
+        return SurfaceCard {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack {
+                    Text(L10n.text("ENTRY CONTRACT", "GİRİŞ SÖZLEŞMESİ"))
+                        .font(.caption2.bold()).foregroundStyle(TrendysseyColor.secondaryText)
+                    Spacer()
+                    pill(config.useTestnet ? "TESTNET" : L10n.text("LIVE", "CANLI"), tint: config.useTestnet ? TrendysseyColor.accent : TrendysseyColor.warning)
+                }
+                ForEach(kinds, id: \.self) { kind in
+                    Label(kind.title, systemImage: "waveform.path.ecg")
+                        .font(.subheadline.weight(.semibold)).foregroundStyle(TrendysseyColor.positive)
+                }
+                Divider()
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                    ruleCell(L10n.text("Evidence floor", "Kanıt tabanı"), "\(minimum) / 100", icon: "checklist")
+                    ruleCell(L10n.text("Confirmation", "Teyit"), config.requireBehaviorConfirmed == false ? L10n.text("Developing allowed", "Gelişen dahil") : L10n.text("Required", "Zorunlu"), icon: "checkmark.seal")
+                    ruleCell(L10n.text("Timeframe", "Zaman dilimi"), config.timeframe.uppercased(), icon: "clock")
+                    ruleCell(L10n.text("Volume floor", "Hacim tabanı"), config.minimumQuoteVolume > 0 ? "$\(Self.compact(config.minimumQuoteVolume))" : L10n.text("Off", "Kapalı"), icon: "drop")
+                    ruleCell(L10n.text("Position size", "Pozisyon boyutu"), "$\(Self.number(config.quotePerTrade))", icon: "banknote")
+                    ruleCell(L10n.text("Capacity", "Kapasite"), "\(openTrades.count) / \(config.maxSlots)", icon: "square.grid.2x2")
+                }
+                Text(L10n.text(
+                    "Edit this contract in Behavior Scenario, then apply it to the trader.",
+                    "Bu sözleşmeyi Davranış Senaryosu'nda düzenleyip işlemciye uygula."
+                ))
+                .font(.caption2).foregroundStyle(TrendysseyColor.secondaryText)
+            }
+        }
+    }
+
+    private func behaviorPath(_ config: TradeExecutorConfig) -> some View {
         SurfaceCard {
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 14) {
+                Text(L10n.text("HOW A POSITION OPENS", "POZİSYON NASIL AÇILIR"))
+                    .font(.caption2.bold()).foregroundStyle(TrendysseyColor.secondaryText)
+                HStack(alignment: .top, spacing: 7) {
+                    pathStep("1", L10n.text("Observe", "Gözle"), L10n.text("Weakening", "Zayıflama"), tint: TrendysseyColor.warning)
+                    pathArrow
+                    pathStep("2", L10n.text("Confirm", "Teyit"), L10n.text("Response + structure", "Karşılık + yapı"), tint: TrendysseyColor.accent)
+                    pathArrow
+                    pathStep("3", L10n.text("Execute", "Uygula"), L10n.text("Rules + free slot", "Kurallar + boş slot"), tint: TrendysseyColor.positive)
+                }
+                Divider()
                 HStack {
                     Label(
-                        config.useTestnet ? L10n.text("TESTNET", "TESTNET") : L10n.text("LIVE", "CANLI"),
-                        systemImage: config.useTestnet ? "testtube.2" : "bolt.circle.fill"
+                        config.useChandelierExit == true
+                            ? L10n.text("Chandelier \(Self.number(config.chandelierAtrMultiplier ?? 3))×ATR exit", "Chandelier \(Self.number(config.chandelierAtrMultiplier ?? 3))×ATR çıkış")
+                            : L10n.text("Fixed target / stop", "Sabit hedef / stop"),
+                        systemImage: "arrow.up.forward.and.arrow.down.backward"
                     )
-                    .font(.caption.bold())
-                    .foregroundStyle(config.useTestnet ? TrendysseyColor.accent : TrendysseyColor.warning)
+                    .font(.caption.weight(.semibold))
                     Spacer()
-                    Text(config.enabled ? L10n.text("Running", "Çalışıyor") : L10n.text("Paused", "Durduruldu"))
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(config.enabled ? TrendysseyColor.positive : TrendysseyColor.secondaryText)
-                }
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-                    if config.useChandelierExit == true {
-                        // The tournament exit: the stop trails the highs, so
-                        // there is no fixed target or stop to show.
-                        parameterCell(
-                            L10n.text("Exit", "Çıkış"),
-                            L10n.text("Chandelier \(Self.percent(config.chandelierAtrMultiplier ?? 3))×ATR", "Chandelier \(Self.percent(config.chandelierAtrMultiplier ?? 3))×ATR"),
-                            tint: TrendysseyColor.accent
-                        )
-                    } else {
-                        parameterCell(L10n.text("Target", "Hedef"), "+%\(Self.percent(config.profitTargetPercent))", tint: TrendysseyColor.positive)
-                        parameterCell(L10n.text("Stop", "Stop"), "-%\(Self.percent(config.stopLossPercent))", tint: TrendysseyColor.negative)
-                    }
-                    parameterCell(L10n.text("Time limit", "Süre"), "\(config.maxOpenHours)s")
-                    parameterCell(L10n.text("Slots", "Slot"), "\(config.maxSlots)")
-                    parameterCell(L10n.text("Per trade", "İşlem başına"), "$\(Self.percent(config.quotePerTrade))")
-                    parameterCell(L10n.text("Min. volume", "Min. hacim"), config.minimumQuoteVolume > 0 ? "$\((config.minimumQuoteVolume / 1_000_000).formatted(.number.precision(.fractionLength(0))))M" : L10n.text("Off", "Kapalı"))
-                    parameterCell(
-                        L10n.text("Entry state", "Giriş durumu"),
-                        entryStateText(config.allowedMarketStates),
-                        tint: TrendysseyColor.accent
-                    )
-                    parameterCell(
-                        L10n.text("Min. state score", "Min. durum puanı"),
-                        (config.minimumStateScore ?? 0) > 0 ? "\(config.minimumStateScore ?? 0) / 100" : L10n.text("Off", "Kapalı")
-                    )
+                    Text(L10n.text("Max \(config.maxOpenHours)h", "Maks. \(config.maxOpenHours)s"))
+                        .font(.caption).monospacedDigit().foregroundStyle(TrendysseyColor.secondaryText)
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
-    private func parameterCell(_ title: String, _ value: String, tint: Color = TrendysseyColor.primaryText) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(title).font(.caption2).foregroundStyle(TrendysseyColor.secondaryText).lineLimit(1).minimumScaleFactor(0.7)
-            Text(value).font(.footnote.weight(.semibold)).monospacedDigit().foregroundStyle(tint)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 10).padding(.vertical, 8)
-        .background(TrendysseyColor.elevated.opacity(0.6), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    private var pathArrow: some View {
+        Image(systemName: "chevron.right").font(.caption2.bold())
+            .foregroundStyle(TrendysseyColor.secondaryText).padding(.top, 18)
     }
 
-    private var summaryCard: some View {
-        SurfaceCard {
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 14) {
-                summaryCell(
-                    L10n.text("REALIZED PNL", "GERÇEKLEŞEN K/Z"),
-                    Self.signedAmount(realizedPnl),
-                    tint: realizedPnl >= 0 ? TrendysseyColor.positive : TrendysseyColor.negative
-                )
-                summaryCell(
-                    L10n.text("OPEN PNL", "AKTİF K/Z"),
-                    Self.signedAmount(unrealizedPnl),
-                    tint: unrealizedPnl >= 0 ? TrendysseyColor.positive : TrendysseyColor.negative
-                )
-                summaryCell(L10n.text("OPEN POSITIONS", "AÇIK POZİSYON"), "\(openTrades.count)")
-                summaryCell(L10n.text("CLOSED", "KAPANAN"), "\(closedTrades.count)")
-            }
-            .frame(maxWidth: .infinity)
-        }
-    }
-
-    private func summaryCell(_ title: String, _ value: String, tint: Color = TrendysseyColor.primaryText) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title).font(.caption2.bold()).foregroundStyle(TrendysseyColor.secondaryText)
-            Text(value).font(.title3.bold()).monospacedDigit().foregroundStyle(tint)
+    private func pathStep(_ number: String, _ title: String, _ detail: String, tint: Color) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(number).font(.caption2.bold()).foregroundStyle(tint)
+                .frame(width: 22, height: 22).background(tint.opacity(0.14), in: Circle())
+            Text(title).font(.caption.bold()).foregroundStyle(tint)
+            Text(detail).font(.caption2).foregroundStyle(TrendysseyColor.secondaryText).lineLimit(3)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func noticeCard(_ text: String, icon: String) -> some View {
+    private var portfolioPulse: some View {
         SurfaceCard {
-            Label(text, systemImage: icon)
-                .font(.caption).foregroundStyle(TrendysseyColor.warning).lineSpacing(3)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 14) {
+                Text(L10n.text("PORTFOLIO PULSE", "PORTFÖY NABZI"))
+                    .font(.caption2.bold()).foregroundStyle(TrendysseyColor.secondaryText)
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 14) {
+                    metric(L10n.text("REALIZED", "GERÇEKLEŞEN"), Self.signed(realizedPnl), tint: realizedPnl >= 0 ? TrendysseyColor.positive : TrendysseyColor.negative)
+                    metric(L10n.text("OPEN PNL", "AKTİF K/Z"), Self.signed(unrealizedPnl), tint: unrealizedPnl >= 0 ? TrendysseyColor.positive : TrendysseyColor.negative)
+                    metric(L10n.text("CAPITAL AT WORK", "ÇALIŞAN SERMAYE"), "$\(Self.number(capitalAtWork))")
+                    metric(L10n.text("CLOSED OUTCOMES", "KAPANAN SONUÇ"), "\(wins) / \(closedTrades.count) " + L10n.text("wins", "kazanç"))
+                }
+            }
         }
     }
 
-    // MARK: - Trades
-
-    @ViewBuilder private var tradeList: some View {
+    @ViewBuilder private var ledger: some View {
         if isLoading && trades.isEmpty {
             SurfaceCard { ProgressView().frame(maxWidth: .infinity).padding(.vertical, 28) }
         } else if loadFailed && trades.isEmpty {
             SurfaceCard {
-                ContentUnavailableView(
-                    L10n.text("Trades unavailable", "İşlemler alınamadı"),
-                    systemImage: "wifi.exclamationmark",
-                    description: Text(L10n.text("Check your connection and pull to refresh.", "Bağlantını kontrol edip yenilemek için aşağı çek."))
-                )
+                ContentUnavailableView(L10n.text("Ledger unavailable", "Kayıtlar alınamadı"), systemImage: "wifi.exclamationmark", description: Text(L10n.text("Check the connection and pull to refresh.", "Bağlantıyı kontrol edip aşağı çek.")))
             }
         } else if trades.isEmpty {
             SurfaceCard {
-                ContentUnavailableView(
-                    L10n.text("No trades yet", "Henüz işlem yok"),
-                    systemImage: "clock",
-                    description: Text(L10n.text(
-                        "The executor opens a position when the selected market state and thresholds match.",
-                        "Seçili piyasa durumu ve eşikler eşleştiğinde pozisyon açılacak."
-                    ))
-                )
+                ContentUnavailableView(L10n.text("Waiting for evidence", "Kanıt bekleniyor"), systemImage: "waveform.path.ecg", description: Text(L10n.text("No behavior has completed the entry contract yet.", "Henüz hiçbir davranış giriş sözleşmesini tamamlamadı.")))
             }
         } else {
-            LazyVStack(spacing: 12) {
-                ForEach(trades) { trade in
-                    SurfaceCard { row(trade) }
-                }
-            }
+            if !openTrades.isEmpty { tradeSection(L10n.text("Active decisions", "Aktif kararlar"), trades: openTrades, tint: TrendysseyColor.accent) }
+            if !historyTrades.isEmpty { tradeSection(L10n.text("Decision history", "Karar geçmişi"), trades: historyTrades, tint: TrendysseyColor.secondaryText) }
         }
     }
 
-    private func row(_ trade: LiveTrade) -> some View {
+    private func tradeSection(_ title: String, trades: [LiveTrade], tint: Color) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text(trade.symbol).font(.subheadline.bold())
-                statusChip(trade)
+                Text(title).font(.headline)
                 Spacer()
-                Text(trade.createdAt, format: .relative(presentation: .named))
-                    .font(.caption2).foregroundStyle(TrendysseyColor.secondaryText)
+                Text("\(trades.count)").font(.caption.bold()).foregroundStyle(tint)
+            }
+            ForEach(trades) { trade in SurfaceCard { tradeRow(trade) } }
+        }
+    }
+
+    private func tradeRow(_ trade: LiveTrade) -> some View {
+        let tint = trade.entryBehaviorDirection?.color ?? TrendysseyColor.secondaryText
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text(trade.symbol.replacingOccurrences(of: "USDT", with: "")).font(.headline)
+                pill(statusTitle(trade), tint: statusTint(trade))
+                Spacer()
+                Text(trade.createdAt, format: .relative(presentation: .named)).font(.caption2).foregroundStyle(TrendysseyColor.secondaryText)
+            }
+            if let behavior = trade.entryBehaviorKind {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: trade.entryBehaviorDirection?.icon ?? "waveform.path")
+                        .foregroundStyle(tint).frame(width: 24, height: 24).background(tint.opacity(0.12), in: Circle())
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(behavior.title).font(.subheadline.weight(.semibold)).foregroundStyle(tint)
+                        Text("\(trade.entryBehaviorScore ?? 0)/100 · " + behaviorStatus(trade.entryBehaviorStatus))
+                            .font(.caption2).monospacedDigit().foregroundStyle(TrendysseyColor.secondaryText)
+                    }
+                }
+                if let evidence = trade.entryBehaviorEvidence, !evidence.isEmpty {
+                    ScrollView(.horizontal) {
+                        HStack(spacing: 6) {
+                            ForEach(evidence, id: \.self) { item in
+                                Text(evidenceTitle(item)).font(.caption2.weight(.medium))
+                                    .padding(.horizontal, 7).padding(.vertical, 4).background(tint.opacity(0.1), in: Capsule())
+                            }
+                        }
+                    }
+                    .scrollIndicators(.hidden)
+                }
+            } else {
+                Text(L10n.text("Legacy decision · behavior was not frozen.", "Eski karar · davranış anlık görüntüsü kaydedilmemiş."))
+                    .font(.caption).foregroundStyle(TrendysseyColor.secondaryText)
             }
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
-                if let signalPrice = trade.signalPrice {
-                    detail(L10n.text("Signal", "Sinyal"), "$\(Self.price(signalPrice))")
-                }
-                if let entryPrice = trade.entryPrice {
-                    detail(L10n.text("Filled at", "Alış"), "$\(Self.price(entryPrice))")
-                }
-                if trade.status == "open", let current = currentPrices[trade.symbol] {
-                    detail(L10n.text("Now", "Güncel"), "$\(Self.price(current))")
-                }
-                if let exitPrice = trade.exitPrice {
-                    detail(L10n.text("Exit", "Çıkış"), "$\(Self.price(exitPrice))")
-                }
-                if let pnl = trade.realizedQuotePnl {
-                    detail(
-                        L10n.text("Realized PnL", "Gerçekleşen K/Z"),
-                        Self.signedAmount(pnl),
-                        tint: pnl >= 0 ? TrendysseyColor.positive : TrendysseyColor.negative
-                    )
-                } else if let pnl = trade.unrealizedPnl(currentPrice: currentPrices[trade.symbol]) {
-                    detail(
-                        L10n.text("Open PnL", "Aktif K/Z"),
-                        Self.signedAmount(pnl),
-                        tint: pnl >= 0 ? TrendysseyColor.positive : TrendysseyColor.negative
-                    )
-                }
-            }
-            // The decision-time snapshot: what the executor measured when it acted.
-            HStack(spacing: 6) {
-                if let state = trade.entryMarketState {
-                    snapshotChip(
-                        "\(state.title)\(trade.entryMarketStateScore.map { " · \($0)/100" } ?? "")\(stateChangeText(trade.entryMarketStateChange))"
-                    )
-                }
-                if let volume = trade.entryQuoteVolume {
-                    snapshotChip(L10n.text("Vol $\(Self.compact(volume))", "Hacim $\(Self.compact(volume))"))
-                }
-                Spacer()
+                if let entry = trade.entryPrice { detail(L10n.text("Entry", "Giriş"), "$\(Self.price(entry))") }
+                if trade.status == "open", let current = currentPrices[trade.symbol] { detail(L10n.text("Now", "Güncel"), "$\(Self.price(current))") }
+                if let exit = trade.exitPrice { detail(L10n.text("Exit", "Çıkış"), "$\(Self.price(exit))") }
+                if let pnl = trade.realizedQuotePnl { detail(L10n.text("Result", "Sonuç"), Self.signed(pnl), tint: pnl >= 0 ? TrendysseyColor.positive : TrendysseyColor.negative) }
+                else if let pnl = trade.unrealizedPnl(currentPrice: currentPrices[trade.symbol]) { detail(L10n.text("Open PnL", "Aktif K/Z"), Self.signed(pnl), tint: pnl >= 0 ? TrendysseyColor.positive : TrendysseyColor.negative) }
+                if let volume = trade.entryQuoteVolume { detail(L10n.text("Entry volume", "Giriş hacmi"), "$\(Self.compact(volume))") }
             }
             if let reason = trade.exitReason {
-                Text(exitReasonText(reason, trade: trade))
-                    .font(.caption2).foregroundStyle(TrendysseyColor.secondaryText)
+                Label(exitReason(reason, trade: trade), systemImage: "arrow.uturn.backward.circle").font(.caption2).foregroundStyle(TrendysseyColor.secondaryText)
             }
-            if let error = trade.errorMessage {
-                Text(error).font(.caption2).foregroundStyle(TrendysseyColor.warning).lineLimit(2)
-            }
+            if let error = trade.errorMessage { Text(error).font(.caption2).foregroundStyle(TrendysseyColor.warning).lineLimit(2) }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func statusChip(_ trade: LiveTrade) -> some View {
-        let (title, tint): (String, Color) = switch trade.status {
-        case "open": (L10n.text("Filled · Open", "Doldu · Açık"), TrendysseyColor.accent)
-        case "pending_entry": (L10n.text("Not filled yet", "Henüz Dolmadı"), TrendysseyColor.warning)
-        case "closed": ((trade.realizedQuotePnl ?? 0) >= 0 ? L10n.text("Won", "Kazandı") : L10n.text("Lost", "Kaybetti"),
-                        (trade.realizedQuotePnl ?? 0) >= 0 ? TrendysseyColor.positive : TrendysseyColor.negative)
-        case "canceled": (L10n.text("Canceled", "İptal"), TrendysseyColor.secondaryText)
-        default: (L10n.text("Error", "Hata"), TrendysseyColor.negative)
+    private var resetAction: some View {
+        Button(role: .destructive) { isConfirmingReset = true } label: {
+            HStack {
+                Label(L10n.text("Close positions and reset ledger", "Pozisyonları kapat ve kayıtları sıfırla"), systemImage: "arrow.counterclockwise").font(.subheadline.weight(.semibold))
+                Spacer()
+                if isResetting { ProgressView() }
+            }
+            .padding(14).background(TrendysseyColor.negative.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
-        return Text(title)
-            .font(.caption2.weight(.semibold))
-            .foregroundStyle(tint)
-            .padding(.horizontal, 7).padding(.vertical, 3)
-            .background(tint.opacity(0.12), in: Capsule())
+        .disabled(isResetting || config?.resetRequested == true)
     }
 
-    private func snapshotChip(_ text: String) -> some View {
-        Text(text)
-            .font(.caption2.weight(.medium))
-            .foregroundStyle(TrendysseyColor.secondaryText)
-            .padding(.horizontal, 7).padding(.vertical, 3)
-            .background(TrendysseyColor.elevated.opacity(0.7), in: Capsule())
+    private func ruleCell(_ title: String, _ value: String, icon: String) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Label(title, systemImage: icon).font(.caption2).foregroundStyle(TrendysseyColor.secondaryText)
+            Text(value).font(.footnote.weight(.semibold)).lineLimit(2).minimumScaleFactor(0.75)
+        }
+        .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading).padding(10)
+        .background(TrendysseyColor.elevated.opacity(0.6), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
-    private func entryStateText(_ states: [MarketStateKind]?) -> String {
-        guard let states, !states.isEmpty else { return L10n.text("Any", "Tümü") }
-        if states.count == 1 { return states[0].title }
-        return L10n.text("\(states.count) states", "\(states.count) durum")
-    }
-
-    private func stateChangeText(_ change: Int?) -> String {
-        guard let change, change != 0 else { return "" }
-        return " · " + L10n.text(
-            "change \(change > 0 ? "+" : "")\(change)",
-            "değişim \(change > 0 ? "+" : "")\(change)"
-        )
+    private func metric(_ title: String, _ value: String, tint: Color = TrendysseyColor.primaryText) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).font(.caption2.bold()).foregroundStyle(TrendysseyColor.secondaryText)
+            Text(value).font(.title3.bold()).monospacedDigit().foregroundStyle(tint).minimumScaleFactor(0.75)
+        }.frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func detail(_ title: String, _ value: String, tint: Color = TrendysseyColor.primaryText) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(title).font(.caption2).foregroundStyle(TrendysseyColor.secondaryText).lineLimit(1).minimumScaleFactor(0.7)
-            Text(value).font(.caption.weight(.semibold)).monospacedDigit().foregroundStyle(tint)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
+            Text(title).font(.caption2).foregroundStyle(TrendysseyColor.secondaryText).lineLimit(1)
+            Text(value).font(.caption.weight(.semibold)).monospacedDigit().foregroundStyle(tint).minimumScaleFactor(0.7)
+        }.frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func exitReasonText(_ reason: String, trade: LiveTrade) -> String {
+    private func notice(_ text: String, icon: String) -> some View {
+        SurfaceCard { Label(text, systemImage: icon).font(.caption).foregroundStyle(TrendysseyColor.warning).lineSpacing(3).frame(maxWidth: .infinity, alignment: .leading) }
+    }
+
+    private func pill(_ text: String, tint: Color) -> some View {
+        Text(text).font(.caption2.bold()).foregroundStyle(tint).padding(.horizontal, 8).padding(.vertical, 4).background(tint.opacity(0.12), in: Capsule())
+    }
+
+    private func statusTitle(_ trade: LiveTrade) -> String {
+        switch trade.status {
+        case "open": L10n.text("OPEN", "AÇIK")
+        case "pending_entry": L10n.text("PENDING", "BEKLİYOR")
+        case "closed": (trade.realizedQuotePnl ?? 0) >= 0 ? L10n.text("WON", "KAZANDI") : L10n.text("LOST", "KAYBETTİ")
+        case "canceled": L10n.text("CANCELED", "İPTAL")
+        default: L10n.text("ERROR", "HATA")
+        }
+    }
+
+    private func statusTint(_ trade: LiveTrade) -> Color {
+        switch trade.status {
+        case "open": TrendysseyColor.accent
+        case "pending_entry": TrendysseyColor.warning
+        case "closed": (trade.realizedQuotePnl ?? 0) >= 0 ? TrendysseyColor.positive : TrendysseyColor.negative
+        case "canceled": TrendysseyColor.secondaryText
+        default: TrendysseyColor.negative
+        }
+    }
+
+    private func behaviorStatus(_ status: BehavioralSignalStatus?) -> String {
+        status == .confirmed ? L10n.text("confirmed", "teyitli") : L10n.text("developing", "gelişiyor")
+    }
+
+    private func evidenceTitle(_ key: String) -> String {
+        switch key {
+        case "structural_reclaim": L10n.text("Structural reclaim", "Yapısal geri alım")
+        case "failed_breakdown": L10n.text("Breakdown rejected", "Aşağı kırılım reddi")
+        case "seller_exhaustion": L10n.text("Seller exhaustion", "Satıcı tükenişi")
+        case "buyer_response": L10n.text("Buyer response", "Alıcı karşılığı")
+        case "recovery_strengthening": L10n.text("Recovery strengthening", "Toparlanma güçleniyor")
+        default: key.replacingOccurrences(of: "_", with: " ").capitalized
+        }
+    }
+
+    private func exitReason(_ reason: String, trade: LiveTrade) -> String {
         switch reason {
         case "target": L10n.text("Closed at the profit target.", "Kâr hedefinde kapandı.")
-        // A chandelier position has a stop but never a target; its stop fill
-        // is the trail doing its job, not a fixed stop-loss.
-        case "stop_loss" where trade.targetPrice == nil && trade.stopPrice != nil:
-            L10n.text("Closed by the trailing stop.", "İz süren stopta kapandı.")
+        case "stop_loss" where trade.targetPrice == nil && trade.stopPrice != nil: L10n.text("Closed by the trailing stop.", "İz süren stopta kapandı.")
         case "stop_loss": L10n.text("Closed at the stop loss.", "Stop loss'ta kapandı.")
-        case "time_limit": L10n.text("Closed at the holding time limit.", "Süre limitinde kapandı.")
+        case "time_limit": L10n.text("Closed at the holding limit.", "Açık kalma limitinde kapandı.")
         case "manual": L10n.text("Closed manually.", "Elle kapatıldı.")
-        default: L10n.text("Closed with an error.", "Hatayla kapandı.")
+        default: L10n.text("Closed after an executor error.", "İşlemci hatasından sonra kapandı.")
         }
     }
 
-    // MARK: - Actions
-
     @MainActor private func requestReset() async {
-        isResetting = true
-        resetFailed = false
+        isResetting = true; resetFailed = false
         defer { isResetting = false }
-        do {
-            try await LiveTradingService.shared.requestReset()
-            await load()
-        } catch {
-            resetFailed = true
-        }
+        do { try await LiveTradingService.shared.requestReset(); await load() }
+        catch { resetFailed = true }
     }
 
     @MainActor private func load() async {
@@ -354,28 +373,17 @@ struct LiveTradesView: View {
         if let loadedConfig { config = loadedConfig }
         if let loadedTrades {
             trades = loadedTrades
-            let openSymbols = Array(Set(loadedTrades.filter { $0.status == "open" }.map(\.symbol)))
-            currentPrices = (try? await LiveTradingService.shared.currentPrices(symbols: openSymbols)) ?? currentPrices
+            let symbols = Array(Set(loadedTrades.filter { $0.status == "open" }.map(\.symbol)))
+            currentPrices = (try? await LiveTradingService.shared.currentPrices(symbols: symbols)) ?? currentPrices
         }
         loadFailed = loadedTrades == nil
     }
 
-    // MARK: - Formatting
-
-    private static func percent(_ value: Double) -> String {
-        value.formatted(.number.precision(.fractionLength(0...1)))
-    }
-
+    private static func number(_ value: Double) -> String { value.formatted(.number.precision(.fractionLength(0...1)).locale(L10n.locale)) }
     private static func price(_ value: Double) -> String {
-        let decimals = value >= 1000 ? 2 : value >= 1 ? 4 : 6
-        return value.formatted(.number.precision(.fractionLength(0...decimals)))
+        let digits = value >= 1000 ? 2 : value >= 1 ? 4 : 6
+        return value.formatted(.number.precision(.fractionLength(0...digits)).locale(L10n.locale))
     }
-
-    private static func signedAmount(_ value: Double) -> String {
-        "\(value >= 0 ? "+" : "")\(value.formatted(.number.precision(.fractionLength(2)))) USDT"
-    }
-
-    private static func compact(_ value: Double) -> String {
-        value.formatted(.number.notation(.compactName).precision(.significantDigits(3)).locale(L10n.locale))
-    }
+    private static func signed(_ value: Double) -> String { "\(value >= 0 ? "+" : "")\(value.formatted(.number.precision(.fractionLength(2)).locale(L10n.locale))) USDT" }
+    private static func compact(_ value: Double) -> String { value.formatted(.number.notation(.compactName).precision(.significantDigits(3)).locale(L10n.locale)) }
 }

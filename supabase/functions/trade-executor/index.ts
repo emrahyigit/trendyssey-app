@@ -1,5 +1,5 @@
 /**
- * Runs the Market State Scenario rules against a real exchange — Spot Testnet by
+ * Runs the Behavioral Scenario rules against a real exchange — Spot Testnet by
  * default. Fired by cron every minute; each run is one reconciliation pass:
  *
  *   1. Open positions: did the OCO exit fill? Did the holding limit expire?
@@ -7,8 +7,8 @@
  *      still unfilled by the next pass → cancel. The entry either fills within
  *      one cycle or the trade is skipped; a partial fill keeps the filled part
  *      as the position and cancels the rest.
- *   3. Fresh Market State transitions that pass the same filters as the
- *      scenario page (state, state score, 24h volume, slots) open a
+ *   3. Fresh bullish behaviors that pass the same filters as the scenario page
+ *      (kind, confirmation, score, 24h volume, slots) open a
  *      new position immediately at market.
  *      A coin never carries two active positions and never re-enters on the
  *      same UTC day, mirroring the scenario page's one-position-per-coin rule.
@@ -41,6 +41,9 @@ interface TradeConfig {
   require_trend_entry?: boolean;
   allowed_market_states?: string[];
   minimum_state_score?: number;
+  allowed_behavior_signals?: string[];
+  minimum_behavior_score?: number;
+  require_behavior_confirmed?: boolean;
   /// Chandelier fields ship in 20260811180000; absent keys read as off.
   use_chandelier_exit?: boolean;
   chandelier_atr_multiplier?: number;
@@ -48,7 +51,10 @@ interface TradeConfig {
 }
 
 /** ATR(14) over closed candles, same recurrence as _shared/indicators.ts. */
-function atrFromKlines(candles: Array<{ high: number; low: number; close: number }>, period = 14): number {
+function atrFromKlines(
+  candles: Array<{ high: number; low: number; close: number }>,
+  period = 14,
+): number {
   if (candles.length < 2) return 0;
   let value = 0;
   const seed: number[] = [];
@@ -85,10 +91,22 @@ Deno.serve(async (req) => {
 
   const binance = BinanceClient.forEnvironment(cfg.use_testnet);
   if (!binance) {
-    return json({ data: { skipped: cfg.use_testnet ? "testnet keys missing" : "live trading not armed" } });
+    return json({
+      data: {
+        skipped: cfg.use_testnet
+          ? "testnet keys missing"
+          : "live trading not armed",
+      },
+    });
   }
 
-  const summary = { closed: 0, entered: 0, pendingFilled: 0, canceled: 0, errors: [] as string[] };
+  const summary = {
+    closed: 0,
+    entered: 0,
+    pendingFilled: 0,
+    canceled: 0,
+    errors: [] as string[],
+  };
 
   if (cfg.reset_requested) {
     await resetLedger(supabase, binance, cfg, summary);
@@ -105,7 +123,12 @@ Deno.serve(async (req) => {
 /** Unwinds every position and starts the ledger over: cancels open orders,
  * sells holdings back to the quote asset, deletes the environment's rows and
  * clears the flag. Cancel failures are logged but never block the wipe. */
-async function resetLedger(supabase: any, binance: BinanceClient, cfg: TradeConfig, summary: any) {
+async function resetLedger(
+  supabase: any,
+  binance: BinanceClient,
+  cfg: TradeConfig,
+  summary: any,
+) {
   const { data: active } = await supabase
     .from("live_trades")
     .select("*")
@@ -114,9 +137,15 @@ async function resetLedger(supabase: any, binance: BinanceClient, cfg: TradeConf
   for (const trade of active ?? []) {
     try {
       if (trade.status === "open") {
-        if (trade.oco_order_list_id) await binance.cancelOrderList(trade.symbol, trade.oco_order_list_id);
-        if (trade.exit_order_id) await binance.cancelOrder(trade.symbol, trade.exit_order_id);
-        if (trade.entry_quantity) await binance.marketSell(trade.symbol, trade.entry_quantity);
+        if (trade.oco_order_list_id) {
+          await binance.cancelOrderList(trade.symbol, trade.oco_order_list_id);
+        }
+        if (trade.exit_order_id) {
+          await binance.cancelOrder(trade.symbol, trade.exit_order_id);
+        }
+        if (trade.entry_quantity) {
+          await binance.marketSell(trade.symbol, trade.entry_quantity);
+        }
       } else if (trade.entry_order_id) {
         await binance.cancelOrder(trade.symbol, trade.entry_order_id);
       }
@@ -131,7 +160,12 @@ async function resetLedger(supabase: any, binance: BinanceClient, cfg: TradeConf
   }).eq("id", true);
 }
 
-async function reconcileOpenTrades(supabase: any, binance: BinanceClient, cfg: TradeConfig, summary: any) {
+async function reconcileOpenTrades(
+  supabase: any,
+  binance: BinanceClient,
+  cfg: TradeConfig,
+  summary: any,
+) {
   const { data: open } = await supabase
     .from("live_trades")
     .select("*")
@@ -151,17 +185,28 @@ async function reconcileOpenTrades(supabase: any, binance: BinanceClient, cfg: T
         for (const item of list.orders ?? []) {
           const order = await binance.order(trade.symbol, String(item.orderId));
           if (order.status === "FILLED" && Number(order.executedQty) > 0) {
-            exitPrice = Number(order.cummulativeQuoteQty) / Number(order.executedQty);
+            exitPrice = Number(order.cummulativeQuoteQty) /
+              Number(order.executedQty);
             reason = order.type === "LIMIT_MAKER" ? "target" : "stop_loss";
           }
         }
-        await closeTrade(supabase, trade, exitPrice, reason ?? "error", summary);
+        await closeTrade(
+          supabase,
+          trade,
+          exitPrice,
+          reason ?? "error",
+          summary,
+        );
         continue;
       }
-      const deadline = new Date(trade.entered_at).getTime() + cfg.max_open_hours * 3_600_000;
+      const deadline = new Date(trade.entered_at).getTime() +
+        cfg.max_open_hours * 3_600_000;
       if (Date.now() >= deadline) {
         await binance.cancelOrderList(trade.symbol, trade.oco_order_list_id);
-        const sale = await binance.marketSell(trade.symbol, trade.entry_quantity);
+        const sale = await binance.marketSell(
+          trade.symbol,
+          trade.entry_quantity,
+        );
         const exitPrice = Number(sale.executedQty) > 0
           ? Number(sale.cummulativeQuoteQty) / Number(sale.executedQty)
           : null;
@@ -173,7 +218,12 @@ async function reconcileOpenTrades(supabase: any, binance: BinanceClient, cfg: T
   }
 }
 
-async function reconcilePendingEntries(supabase: any, binance: BinanceClient, cfg: TradeConfig, summary: any) {
+async function reconcilePendingEntries(
+  supabase: any,
+  binance: BinanceClient,
+  cfg: TradeConfig,
+  summary: any,
+) {
   const { data: pending } = await supabase
     .from("live_trades")
     .select("*")
@@ -183,12 +233,23 @@ async function reconcilePendingEntries(supabase: any, binance: BinanceClient, cf
     try {
       const order = await binance.order(trade.symbol, trade.entry_order_id);
       if (order.status === "FILLED") {
-        const entryPrice = Number(order.cummulativeQuoteQty) / Number(order.executedQty);
-        await placeExitAndOpen(supabase, binance, cfg, trade, entryPrice, order.executedQty);
+        const entryPrice = Number(order.cummulativeQuoteQty) /
+          Number(order.executedQty);
+        await placeExitAndOpen(
+          supabase,
+          binance,
+          cfg,
+          trade,
+          entryPrice,
+          order.executedQty,
+        );
         summary.pendingFilled += 1;
         continue;
       }
-      if (order.status === "CANCELED" || order.status === "EXPIRED" || order.status === "REJECTED") {
+      if (
+        order.status === "CANCELED" || order.status === "EXPIRED" ||
+        order.status === "REJECTED"
+      ) {
         await supabase.from("live_trades").update({
           status: "canceled",
           error_message: `entry order ${order.status.toLowerCase()}`,
@@ -205,19 +266,35 @@ async function reconcilePendingEntries(supabase: any, binance: BinanceClient, cf
       if (Date.now() < new Date(trade.created_at).getTime() + 45_000) continue;
       let canceled: any;
       try {
-        canceled = await binance.cancelOrder(trade.symbol, trade.entry_order_id);
+        canceled = await binance.cancelOrder(
+          trade.symbol,
+          trade.entry_order_id,
+        );
       } catch (_error) {
         // Most likely the order filled between the status read and the
         // cancel; the next pass will see FILLED and open it normally.
         continue;
       }
-      const partialQty = Number(canceled?.executedQty ?? order.executedQty ?? 0);
+      const partialQty = Number(
+        canceled?.executedQty ?? order.executedQty ?? 0,
+      );
       if (partialQty > 0) {
         // Part of the entry filled before the cancel: that part is a real
         // position and still needs its exit OCO.
-        const quote = Number(canceled?.cummulativeQuoteQty ?? order.cummulativeQuoteQty ?? 0);
-        const entryPrice = quote > 0 ? quote / partialQty : Number(trade.entry_trigger_price);
-        await placeExitAndOpen(supabase, binance, cfg, trade, entryPrice, String(partialQty));
+        const quote = Number(
+          canceled?.cummulativeQuoteQty ?? order.cummulativeQuoteQty ?? 0,
+        );
+        const entryPrice = quote > 0
+          ? quote / partialQty
+          : Number(trade.entry_trigger_price);
+        await placeExitAndOpen(
+          supabase,
+          binance,
+          cfg,
+          trade,
+          entryPrice,
+          String(partialQty),
+        );
         summary.pendingFilled += 1;
         continue;
       }
@@ -233,7 +310,12 @@ async function reconcilePendingEntries(supabase: any, binance: BinanceClient, cf
   }
 }
 
-async function openNewTrades(supabase: any, binance: BinanceClient, cfg: TradeConfig, summary: any) {
+async function openNewTrades(
+  supabase: any,
+  binance: BinanceClient,
+  cfg: TradeConfig,
+  summary: any,
+) {
   const { count: activeCount } = await supabase
     .from("live_trades")
     .select("id", { count: "exact", head: true })
@@ -242,31 +324,56 @@ async function openNewTrades(supabase: any, binance: BinanceClient, cfg: TradeCo
   let freeSlots = cfg.max_slots - (activeCount ?? 0);
   if (freeSlots <= 0) return;
 
-  // The named Market State transition is the entry event. Older transitions
-  // were already seen (or predate the executor) and cannot open stale trades.
-  const { data: stateEvents, error: stateEventError } = await supabase
+  // A newly printed bullish behavioral read is the entry event. Market state
+  // remains in the snapshot as context, but never decides the trade.
+  const { data: observations, error: observationError } = await supabase
     .from("market_state_current")
-    .select("symbol_id,state,state_score,state_score_change,state_since,candle_close_time,close_price,quote_volume_24h,symbols!inner(symbol,quote_volume_24h)")
+    .select(
+      "symbol_id,state,state_score,state_score_change,candle_close_time,close_price,quote_volume_24h,behavioral_signals,symbols!inner(symbol,quote_volume_24h)",
+    )
     .eq("timeframe", cfg.timeframe)
-    .in("state", cfg.allowed_market_states ?? ["bullish_confirmation"])
-    .gte("state_since", new Date(Date.now() - 30 * 60_000).toISOString())
-    .order("state_score", { ascending: false });
-  if (stateEventError) {
-    summary.errors.push(`market-state entries: ${stateEventError.message}`);
+    .gte("candle_close_time", new Date(Date.now() - 30 * 60_000).toISOString());
+  if (observationError) {
+    summary.errors.push(`behavioral entries: ${observationError.message}`);
     return;
   }
 
-  // Same-day re-entry guard uses the UTC day, matching the scenario page.
-  const utcDayStart = new Date(Date.now() - (Date.now() % 86_400_000)).toISOString();
+  const allowed = new Set(cfg.allowed_behavior_signals ?? ["buyer_takeover"]);
+  const candidates = (observations ?? []).flatMap((observation: any) => {
+    const signals = Array.isArray(observation.behavioral_signals)
+      ? observation.behavioral_signals
+      : [];
+    return signals
+      .filter((signal: any) =>
+        signal?.direction === "bullish" &&
+        allowed.has(String(signal?.kind ?? "")) &&
+        Number(signal?.score ?? 0) >=
+          Number(cfg.minimum_behavior_score ?? 60) &&
+        (!cfg.require_behavior_confirmed || signal?.status === "confirmed")
+      )
+      .map((signal: any) => ({ observation, signal }));
+  }).sort((a: any, b: any) =>
+    Number(b.signal.score ?? 0) - Number(a.signal.score ?? 0)
+  );
 
-  for (const stateEvent of stateEvents ?? []) {
+  // Same-day re-entry guard uses the UTC day, matching the scenario page.
+  const utcDayStart = new Date(Date.now() - (Date.now() % 86_400_000))
+    .toISOString();
+
+  for (const candidate of candidates) {
     if (freeSlots <= 0) break;
     try {
+      const stateEvent = candidate.observation;
+      const behavior = candidate.signal;
       const quoteVolume = Number(
-        stateEvent.quote_volume_24h ?? stateEvent.symbols?.quote_volume_24h ?? 0,
+        stateEvent.quote_volume_24h ?? stateEvent.symbols?.quote_volume_24h ??
+          0,
       );
       if (quoteVolume < cfg.minimum_quote_volume) continue;
-      if (Number(stateEvent.state_score ?? 0) < Number(cfg.minimum_state_score ?? 0)) continue;
+      if (
+        Number(stateEvent.state_score ?? 0) <
+          Number(cfg.minimum_state_score ?? 0)
+      ) continue;
       const symbol = stateEvent.symbols.symbol as string;
 
       // One position per state transition, ever. Re-scanning the same candle
@@ -276,7 +383,7 @@ async function openNewTrades(supabase: any, binance: BinanceClient, cfg: TradeCo
         .select("id", { count: "exact", head: true })
         .eq("symbol", symbol)
         .eq("entry_timeframe", cfg.timeframe)
-        .eq("market_state_since", stateEvent.state_since)
+        .eq("market_state_since", stateEvent.candle_close_time)
         .eq("is_testnet", cfg.use_testnet);
       if ((seen ?? 0) > 0) continue;
 
@@ -289,16 +396,22 @@ async function openNewTrades(supabase: any, binance: BinanceClient, cfg: TradeCo
         .select("id", { count: "exact", head: true })
         .eq("symbol", symbol)
         .eq("is_testnet", cfg.use_testnet)
-        .or(`status.in.(open,pending_entry),and(created_at.gte.${utcDayStart},status.neq.canceled)`);
+        .or(
+          `status.in.(open,pending_entry),and(created_at.gte.${utcDayStart},status.neq.canceled)`,
+        );
       if (sameCoinError) {
-        summary.errors.push(`${symbol}: same-coin check failed: ${sameCoinError.message}`);
+        summary.errors.push(
+          `${symbol}: same-coin check failed: ${sameCoinError.message}`,
+        );
         continue;
       }
       if ((sameCoin ?? 0) > 0) continue;
 
       let signalPrice = Number(stateEvent.close_price ?? 0);
       if (!(signalPrice > 0)) {
-        const latest = await fetchClosedKlines(symbol, cfg.timeframe, { limit: 2 });
+        const latest = await fetchClosedKlines(symbol, cfg.timeframe, {
+          limit: 2,
+        });
         signalPrice = Number(latest.at(-1)?.close ?? 0);
       }
       const snapshot = {
@@ -307,19 +420,31 @@ async function openNewTrades(supabase: any, binance: BinanceClient, cfg: TradeCo
         entry_market_state: stateEvent.state,
         entry_market_state_score: stateEvent.state_score,
         entry_market_state_change: stateEvent.state_score_change,
+        entry_behavior_kind: behavior.kind,
+        entry_behavior_score: behavior.score,
+        entry_behavior_direction: behavior.direction,
+        entry_behavior_status: behavior.status,
+        entry_behavior_evidence: behavior.evidence ?? [],
         entry_timeframe: cfg.timeframe,
-        market_state_since: stateEvent.state_since,
+        market_state_since: stateEvent.candle_close_time,
       };
 
       const rules = await binance.symbolRules(symbol);
       if (cfg.quote_per_trade < rules.minNotional) {
-        summary.errors.push(`${symbol}: quote_per_trade below minNotional ${rules.minNotional}`);
+        summary.errors.push(
+          `${symbol}: quote_per_trade below minNotional ${rules.minNotional}`,
+        );
         continue;
       }
 
-      const order = await binance.marketBuyWithQuote(symbol, cfg.quote_per_trade);
+      const order = await binance.marketBuyWithQuote(
+        symbol,
+        cfg.quote_per_trade,
+      );
       const executedQty = Number(order.executedQty);
-      if (!(executedQty > 0)) throw new Error("market buy filled zero quantity");
+      if (!(executedQty > 0)) {
+        throw new Error("market buy filled zero quantity");
+      }
       const entryPrice = Number(order.cummulativeQuoteQty) / executedQty;
       const { data: inserted } = await supabase.from("live_trades").insert({
         symbol,
@@ -331,11 +456,23 @@ async function openNewTrades(supabase: any, binance: BinanceClient, cfg: TradeCo
         is_testnet: cfg.use_testnet,
         ...snapshot,
       }).select("*").single();
-      await placeExitAndOpen(supabase, binance, cfg, inserted, entryPrice, order.executedQty);
+      await placeExitAndOpen(
+        supabase,
+        binance,
+        cfg,
+        inserted,
+        entryPrice,
+        order.executedQty,
+      );
       summary.entered += 1;
       freeSlots -= 1;
     } catch (error) {
-      summary.errors.push(`${stateEvent.symbols?.symbol ?? stateEvent.symbol_id}: ${message(error)}`);
+      summary.errors.push(
+        `${
+          candidate.observation.symbols?.symbol ??
+            candidate.observation.symbol_id
+        }: ${message(error)}`,
+      );
     }
   }
 }
@@ -351,11 +488,13 @@ async function reconcileChandelierTrade(
 ) {
   const order = await binance.order(trade.symbol, trade.exit_order_id);
   if (order.status === "FILLED" && Number(order.executedQty) > 0) {
-    const exitPrice = Number(order.cummulativeQuoteQty) / Number(order.executedQty);
+    const exitPrice = Number(order.cummulativeQuoteQty) /
+      Number(order.executedQty);
     await closeTrade(supabase, trade, exitPrice, "stop_loss", summary);
     return;
   }
-  const deadline = new Date(trade.entered_at).getTime() + cfg.max_open_hours * 3_600_000;
+  const deadline = new Date(trade.entered_at).getTime() +
+    cfg.max_open_hours * 3_600_000;
   if (Date.now() >= deadline) {
     await binance.cancelOrder(trade.symbol, trade.exit_order_id);
     const sale = await binance.marketSell(trade.symbol, trade.entry_quantity);
@@ -374,7 +513,16 @@ async function reconcileChandelierTrade(
   const currentStop = Number(trade.stop_price ?? 0);
   if (!(atr > 0)) {
     // No ATR was measurable at entry: the fixed fallback stop never trails.
-    if (orderGone) await placeTrailingStop(supabase, binance, trade, currentStop, Number(trade.high_watermark ?? 0), rules);
+    if (orderGone) {
+      await placeTrailingStop(
+        supabase,
+        binance,
+        trade,
+        currentStop,
+        Number(trade.high_watermark ?? 0),
+        rules,
+      );
+    }
     return;
   }
   const candles = await fetchClosedKlines(trade.symbol, cfg.timeframe, {
@@ -387,7 +535,9 @@ async function reconcileChandelierTrade(
     ...candles.map((candle) => candle.high),
   );
   const multiplier = cfg.chandelier_atr_multiplier ?? 3;
-  const nextStop = Number(binance.roundPrice(watermark - multiplier * atr, rules));
+  const nextStop = Number(
+    binance.roundPrice(watermark - multiplier * atr, rules),
+  );
   // Ratchet only: the stop rises with the watermark and never comes back down.
   if (!orderGone && nextStop <= currentStop + rules.tickSize / 2) {
     if (watermark > Number(trade.high_watermark ?? 0)) {
@@ -407,7 +557,14 @@ async function reconcileChandelierTrade(
       return;
     }
   }
-  await placeTrailingStop(supabase, binance, trade, Math.max(nextStop, currentStop), watermark, rules);
+  await placeTrailingStop(
+    supabase,
+    binance,
+    trade,
+    Math.max(nextStop, currentStop),
+    watermark,
+    rules,
+  );
 }
 
 /** Places (or restores) the chandelier stop and records its new level. */
@@ -419,10 +576,18 @@ async function placeTrailingStop(
   watermark: number,
   rules: any,
 ) {
-  const stopTrigger = binance.roundPrice(Math.max(stopPrice, rules.tickSize), rules);
+  const stopTrigger = binance.roundPrice(
+    Math.max(stopPrice, rules.tickSize),
+    rules,
+  );
   const stopLimit = binance.roundPrice(Number(stopTrigger) * 0.995, rules);
   const quantity = binance.roundQuantity(Number(trade.entry_quantity), rules);
-  const order = await binance.stopLimitSell(trade.symbol, quantity, stopTrigger, stopLimit);
+  const order = await binance.stopLimitSell(
+    trade.symbol,
+    quantity,
+    stopTrigger,
+    stopLimit,
+  );
   await supabase.from("live_trades").update({
     exit_order_id: String(order.orderId),
     stop_price: Number(stopTrigger),
@@ -449,7 +614,9 @@ async function placeExitAndOpen(
     // fixed stop-loss percent protects the position without trailing.
     let atr = 0;
     try {
-      atr = atrFromKlines(await fetchClosedKlines(trade.symbol, cfg.timeframe, { limit: 120 }));
+      atr = atrFromKlines(
+        await fetchClosedKlines(trade.symbol, cfg.timeframe, { limit: 120 }),
+      );
     } catch (_error) {
       atr = 0;
     }
@@ -457,9 +624,17 @@ async function placeExitAndOpen(
     const initialStop = atr > 0
       ? entryPrice - multiplier * atr
       : entryPrice * (1 - cfg.stop_loss_percent / 100);
-    const stopTrigger = binance.roundPrice(Math.max(initialStop, rules.tickSize), rules);
+    const stopTrigger = binance.roundPrice(
+      Math.max(initialStop, rules.tickSize),
+      rules,
+    );
     const stopLimit = binance.roundPrice(Number(stopTrigger) * 0.995, rules);
-    const order = await binance.stopLimitSell(trade.symbol, quantity, stopTrigger, stopLimit);
+    const order = await binance.stopLimitSell(
+      trade.symbol,
+      quantity,
+      stopTrigger,
+      stopLimit,
+    );
     await supabase.from("live_trades").update({
       status: "open",
       entry_price: entryPrice,
@@ -474,10 +649,22 @@ async function placeExitAndOpen(
     }).eq("id", trade.id);
     return;
   }
-  const target = binance.roundPrice(entryPrice * (1 + cfg.profit_target_percent / 100), rules);
-  const stopTrigger = binance.roundPrice(entryPrice * (1 - cfg.stop_loss_percent / 100), rules);
+  const target = binance.roundPrice(
+    entryPrice * (1 + cfg.profit_target_percent / 100),
+    rules,
+  );
+  const stopTrigger = binance.roundPrice(
+    entryPrice * (1 - cfg.stop_loss_percent / 100),
+    rules,
+  );
   const stopLimit = binance.roundPrice(Number(stopTrigger) * 0.995, rules);
-  const oco = await binance.ocoSell(trade.symbol, quantity, target, stopTrigger, stopLimit);
+  const oco = await binance.ocoSell(
+    trade.symbol,
+    quantity,
+    target,
+    stopTrigger,
+    stopLimit,
+  );
   await supabase.from("live_trades").update({
     status: "open",
     entry_price: entryPrice,
@@ -490,7 +677,13 @@ async function placeExitAndOpen(
   }).eq("id", trade.id);
 }
 
-async function closeTrade(supabase: any, trade: any, exitPrice: number | null, reason: string, summary: any) {
+async function closeTrade(
+  supabase: any,
+  trade: any,
+  exitPrice: number | null,
+  reason: string,
+  summary: any,
+) {
   const pnl = exitPrice !== null && trade.entry_price
     ? (exitPrice - Number(trade.entry_price)) * Number(trade.entry_quantity)
     : null;
@@ -505,7 +698,12 @@ async function closeTrade(supabase: any, trade: any, exitPrice: number | null, r
   summary.closed += 1;
 }
 
-async function recordError(supabase: any, tradeId: string, error: unknown, summary: any) {
+async function recordError(
+  supabase: any,
+  tradeId: string,
+  error: unknown,
+  summary: any,
+) {
   summary.errors.push(message(error));
   await supabase.from("live_trades").update({
     error_message: message(error),

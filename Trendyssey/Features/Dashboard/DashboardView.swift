@@ -62,7 +62,7 @@ struct DashboardView: View {
                 .foregroundStyle(TrendysseyColor.primaryText)
                 .accessibilityLabel(L10n.text("Notifications", "Bildirimler"))
             }
-            Text(L10n.text("Market Overview", "Piyasa Özeti"))
+            Text(L10n.text("Behavior Overview", "Davranış Özeti"))
                 .font(.largeTitle.bold())
                 .foregroundStyle(TrendysseyColor.primaryText)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -81,7 +81,7 @@ struct DashboardView: View {
         }.scrollIndicators(.hidden).scrollTargetBehavior(.viewAligned)
         if signals.count > 1 {
             HStack(spacing: 5) {
-                Text(L10n.text("Swipe for more states", "Diğer durumlar için kaydır"))
+                Text(L10n.text("Swipe for more reads", "Diğer okumalar için kaydır"))
                 Image(systemName: "arrow.right")
             }
             .font(.caption.weight(.semibold))
@@ -93,76 +93,77 @@ struct DashboardView: View {
     }
 
     @ViewBuilder private func content(_ overview: MarketOverview) -> some View {
-        // The carousel answers what people open the app for: what is running
-        // today. Volume follows those coins, so it leads.
-        let gainers = overview.signals
-            .filter { $0.change24h > 0 }
+        let withBehavior = overview.signals.filter {
+            $0.marketState?.leadingBehavioralSignal != nil
+        }
+        let confirmedAll = withBehavior.filter {
+            $0.marketState?.leadingBehavioralSignal?.status == .confirmed
+        }
+        let confirmed = confirmedAll
             .sorted {
-                if $0.change24h != $1.change24h { return $0.change24h > $1.change24h }
+                let left = $0.marketState?.leadingBehavioralSignal?.score ?? 0
+                let right = $1.marketState?.leadingBehavioralSignal?.score ?? 0
+                if left != right { return left > right }
                 return $0.quoteVolume24h > $1.quoteVolume24h
             }
-            .prefix(10)
-        // The list underneath is the part the engine is actually for: coins
-        // where control is changing hands. Rank runs down the cycle rather than
-        // by score alone — a handover that just happened is a fresher entry
-        // than a move already running, and dominance is absent because by then
-        // the move has happened.
-        let turnRank: (MarketStateKind) -> Int = { state in
-            switch state {
-            case .buyerTakeover: 3
-            case .sellerExhaustion: 2
-            case .buySideAbsorption: 1
-            default: 0
+            .prefix(8)
+        let developingAll = withBehavior.filter {
+            $0.marketState?.leadingBehavioralSignal?.status == .developing
+        }
+        let developing = developingAll
+            .sorted {
+                let left = $0.marketState?.leadingBehavioralSignal?.score ?? 0
+                let right = $1.marketState?.leadingBehavioralSignal?.score ?? 0
+                if left != right { return left > right }
+                return $0.quoteVolume24h > $1.quoteVolume24h
             }
-        }
-        let ranked = { (rank: @escaping (MarketStateKind) -> Int, limit: Int) in
-            overview.signals
-                .filter { rank($0.marketState?.state ?? .lowParticipation) > 0 }
-                .sorted {
-                    let leftRank = rank($0.marketState?.state ?? .lowParticipation)
-                    let rightRank = rank($1.marketState?.state ?? .lowParticipation)
-                    if leftRank != rightRank { return leftRank > rightRank }
-                    let left = $0.marketState?.stateScore ?? 0
-                    let right = $1.marketState?.stateScore ?? 0
-                    if left != right { return left > right }
-                    return $0.quoteVolume24h > $1.quoteVolume24h
-                }
-                .prefix(limit)
-        }
-        let turning = Array(ranked(turnRank, 7))
+            .prefix(8)
+        let bullish = withBehavior.filter {
+            $0.marketState?.leadingBehavioralSignal?.direction == .bullish
+        }.count
+        let bearish = withBehavior.filter {
+            $0.marketState?.leadingBehavioralSignal?.direction == .bearish
+        }.count
 
+        behaviorPulse(
+            scanned: overview.signals.filter { $0.marketState != nil }.count,
+            confirmed: confirmedAll.count,
+            developing: developingAll.count,
+            bullish: bullish,
+            bearish: bearish
+        )
         VStack(alignment: .leading, spacing: 12) {
             sectionTitle(
-                L10n.text("Today's Gainers", "Bugün Yükselenler"),
+                L10n.text("Confirmed Transitions", "Doğrulanmış Geçişler"),
                 subtitle: L10n.text(
-                    "Biggest 24-hour risers in the scanned universe.",
-                    "Taranan evrende 24 saatte en çok yükselenler."
+                    "Weakness, opposite-side response and structure agree.",
+                    "Zayıflık, karşı tarafın cevabı ve yapı aynı şeyi söylüyor."
                 )
             )
-            if gainers.isEmpty {
+            if confirmed.isEmpty {
                 emptyRow(
-                    L10n.text("Nothing is up over 24 hours", "24 saatte yükselen yok"),
-                    icon: "chart.line.uptrend.xyaxis"
+                    L10n.text("No transition is confirmed right now", "Şu anda doğrulanmış geçiş yok"),
+                    icon: "checkmark.seal"
                 )
             } else {
-                carousel(Array(gainers))
+                carousel(Array(confirmed))
             }
         }
         VStack(alignment: .leading, spacing: 12) {
             sectionTitle(
-                L10n.text("The Turn Window", "Dönüş Penceresi"),
+                L10n.text("Developing Reads", "Gelişen Okumalar"),
                 subtitle: L10n.text(
-                    "Control just changed hands, the selling died, or it is still being absorbed on closed \(AnalysisTimeframe.selected.title) candles.",
-                    "Kapanmış \(AnalysisTimeframe.selected.title) mumlarında yeni el değiştiren kontrol, tükenen satış veya hâlâ emilen satış."
+                    "Strong divergences still waiting for the next piece of evidence on closed \(AnalysisTimeframe.selected.title) candles.",
+                    "Kapanmış \(AnalysisTimeframe.selected.title) mumlarında bir sonraki kanıtı bekleyen güçlü ayrışmalar."
                 )
             )
-            if turning.isEmpty {
+            if developing.isEmpty {
                 emptyRow(
-                    L10n.text("No coin is turning right now", "Şu anda dönen bir coin yok"),
-                    icon: "arrow.turn.up.right"
+                    L10n.text("No strong developing read", "Güçlü gelişen okuma yok"),
+                    icon: "waveform.path.ecg"
                 )
             } else {
-                ForEach(turning) { signal in
+                ForEach(developing) { signal in
                     NavigationLink(value: signal) { SignalRow(signal: signal) }.buttonStyle(.plain)
                 }
             }
@@ -217,6 +218,86 @@ struct DashboardView: View {
             }
         }
         disclaimer
+    }
+
+    private func behaviorPulse(
+        scanned: Int,
+        confirmed: Int,
+        developing: Int,
+        bullish: Int,
+        bearish: Int
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(L10n.text("Behavioral Radar", "Davranış Radarı"))
+                        .font(.title3.bold())
+                    Text(L10n.text(
+                        "What is changing across the scanned universe.",
+                        "Taranan evrende değişmekte olan davranışlar."
+                    ))
+                    .font(.caption)
+                    .foregroundStyle(TrendysseyColor.secondaryText)
+                }
+                Spacer()
+                Text(AnalysisTimeframe.selected.title)
+                    .font(.caption2.bold())
+                    .foregroundStyle(TrendysseyColor.accent)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(TrendysseyColor.accent.opacity(0.10), in: Capsule())
+            }
+            HStack(spacing: 9) {
+                radarStat(
+                    value: confirmed,
+                    title: L10n.text("Confirmed", "Doğrulandı"),
+                    icon: "checkmark.seal.fill",
+                    tint: TrendysseyColor.accent
+                )
+                radarStat(
+                    value: developing,
+                    title: L10n.text("Developing", "Gelişiyor"),
+                    icon: "waveform.path.ecg",
+                    tint: TrendysseyColor.warning
+                )
+                radarStat(
+                    value: scanned,
+                    title: L10n.text("Scanned", "Tarandı"),
+                    icon: "scope",
+                    tint: TrendysseyColor.secondaryText
+                )
+            }
+            HStack(spacing: 8) {
+                Label("\(bullish) \(L10n.text("bullish", "yükseliş"))", systemImage: "arrow.up.right")
+                    .foregroundStyle(TrendysseyColor.positive)
+                Spacer()
+                Label("\(bearish) \(L10n.text("bearish", "düşüş"))", systemImage: "arrow.down.right")
+                    .foregroundStyle(TrendysseyColor.negative)
+            }
+            .font(.caption.weight(.semibold))
+        }
+        .padding(16)
+        .background(TrendysseyColor.surface, in: RoundedRectangle(cornerRadius: 20))
+        .overlay(RoundedRectangle(cornerRadius: 20).stroke(TrendysseyColor.border, lineWidth: 1))
+    }
+
+    private func radarStat(value: Int, title: String, icon: String, tint: Color) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Image(systemName: icon)
+                .font(.caption)
+                .foregroundStyle(tint)
+            Text("\(value)")
+                .font(.title2.bold())
+                .monospacedDigit()
+            Text(title)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(TrendysseyColor.secondaryText)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(TrendysseyColor.elevated, in: RoundedRectangle(cornerRadius: 13))
     }
 
     private func sectionTitle(_ title: String, subtitle: String) -> some View { VStack(alignment: .leading, spacing: 3) { Text(title).font(.title3.bold()); Text(subtitle).font(.caption).foregroundStyle(TrendysseyColor.secondaryText) } }

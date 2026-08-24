@@ -28,6 +28,11 @@ struct LiveTrade: Identifiable, Decodable, Sendable {
     let entryMarketState: MarketStateKind?
     let entryMarketStateScore: Int?
     let entryMarketStateChange: Int?
+    let entryBehaviorKind: BehavioralSignalKind?
+    let entryBehaviorScore: Int?
+    let entryBehaviorDirection: BehavioralDirection?
+    let entryBehaviorStatus: BehavioralSignalStatus?
+    let entryBehaviorEvidence: [String]?
 
     var returnPercent: Double? {
         guard let entryPrice, let exitPrice, entryPrice > 0 else { return nil }
@@ -60,6 +65,9 @@ struct TradeExecutorConfig: Decodable, Sendable {
     let requireTrendEntry: Bool?
     let allowedMarketStates: [MarketStateKind]?
     let minimumStateScore: Int?
+    let allowedBehaviorSignals: [BehavioralSignalKind]?
+    let minimumBehaviorScore: Int?
+    let requireBehaviorConfirmed: Bool?
     /// Nil until the chandelier-exit migration lands server-side.
     let useChandelierExit: Bool?
     let chandelierAtrMultiplier: Double?
@@ -75,7 +83,7 @@ actor LiveTradingService {
         // until one lands its select 400s, so fall back column set by column
         // set rather than blanking the page.
         let columnSets = [
-            baseColumns + ",minimum_trend_score,require_trend_entry,use_chandelier_exit,chandelier_atr_multiplier,allowed_market_states,minimum_state_score",
+            baseColumns + ",minimum_trend_score,require_trend_entry,use_chandelier_exit,chandelier_atr_multiplier,allowed_market_states,minimum_state_score,allowed_behavior_signals,minimum_behavior_score,require_behavior_confirmed",
             baseColumns + ",minimum_trend_score,require_trend_entry,use_chandelier_exit,chandelier_atr_multiplier,allowed_market_states",
             baseColumns + ",minimum_trend_score,require_trend_entry,use_chandelier_exit,chandelier_atr_multiplier",
             baseColumns + ",minimum_trend_score,require_trend_entry",
@@ -105,7 +113,7 @@ actor LiveTradingService {
             ]
         }
         do {
-            return try await fetch(path: "rest/v1/live_trades", query: query(baseColumns + ",entry_trend_score,entry_market_state,entry_market_state_score,entry_market_state_change"))
+            return try await fetch(path: "rest/v1/live_trades", query: query(baseColumns + ",entry_trend_score,entry_market_state,entry_market_state_score,entry_market_state_change,entry_behavior_kind,entry_behavior_score,entry_behavior_direction,entry_behavior_status,entry_behavior_evidence"))
         } catch {
             do {
                 return try await fetch(path: "rest/v1/live_trades", query: query(baseColumns + ",entry_trend_score"))
@@ -143,6 +151,9 @@ actor LiveTradingService {
         minimumQuoteVolume: Double,
         allowedMarketStates: [MarketStateKind],
         minimumStateScore: Int,
+        allowedBehaviorSignals: [BehavioralSignalKind],
+        minimumBehaviorScore: Int,
+        requireBehaviorConfirmed: Bool,
         useChandelierExit: Bool,
         chandelierAtrMultiplier: Double,
         timeframe: String,
@@ -184,6 +195,14 @@ actor LiveTradingService {
             body: [
                 "p_allowed_market_states": allowedMarketStates.map(\.rawValue),
                 "p_minimum_state_score": minimumStateScore,
+            ]
+        )
+        try await rpc(
+            "update_trade_behavior_rules",
+            body: [
+                "p_allowed_behavior_signals": allowedBehaviorSignals.map(\.rawValue),
+                "p_minimum_behavior_score": minimumBehaviorScore,
+                "p_require_behavior_confirmed": requireBehaviorConfirmed,
             ]
         )
     }
