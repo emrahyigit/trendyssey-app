@@ -157,6 +157,14 @@ struct MarketSignal: Identifiable, Hashable, Sendable {
     /// Nil until the first scan after the score shipped reaches this
     /// symbol/timeframe — shown as "—", never as a fake neutral 50.
     let relativeStrengthScore: Int?
+    /// The score one scan cycle earlier, for the delta badge.
+    let previousSignalStrength: Int?
+
+    /// Change since the previous scan cycle; nil while either side is unknown.
+    var signalStrengthDelta: Int? {
+        guard let current = relativeStrengthScore, let previous = previousSignalStrength else { return nil }
+        return current - previous
+    }
     let breakoutTriggered: Bool
     let falseBreakoutRisk: Int
     let activityScore: Int
@@ -186,6 +194,7 @@ struct MarketSignal: Identifiable, Hashable, Sendable {
         breakoutQualityScore: Int? = nil,
         confirmationScore: Int = 0,
         relativeStrengthScore: Int? = nil,
+        previousSignalStrength: Int? = nil,
         breakoutTriggered: Bool = false,
         falseBreakoutRisk: Int,
         activityScore: Int,
@@ -214,6 +223,7 @@ struct MarketSignal: Identifiable, Hashable, Sendable {
         self.breakoutQualityScore = breakoutQualityScore ?? confidence
         self.confirmationScore = confirmationScore
         self.relativeStrengthScore = relativeStrengthScore
+        self.previousSignalStrength = previousSignalStrength
         self.breakoutTriggered = breakoutTriggered
         self.falseBreakoutRisk = falseBreakoutRisk
         self.activityScore = activityScore

@@ -485,6 +485,9 @@ async function scanDoublePattern(
     relative_strength_win_rate: symbol.symbol === "BTCUSDT"
       ? 0.5
       : btc.relativeStrength?.winRate ?? null,
+    // Hand the current score to the previous-cycle slot; the refresh that
+    // follows this scan writes the new one on top.
+    previous_relative_strength_score: previous?.relative_strength_score ?? null,
     breakout_triggered: scoreLayers.breakoutTriggered,
     scoring_version: scoreLayers.scoringVersion,
     false_breakout_risk: risk,
@@ -694,7 +697,7 @@ async function scanIndicatorModel(
   const { data: previous } = await supabase
     .from("breakout_signals")
     .select(
-      "id,status,breakout_level,candle_close_time,explanation_facts,journey_id,breakout_quality_score,trend_entry",
+      "id,status,breakout_level,candle_close_time,explanation_facts,journey_id,breakout_quality_score,trend_entry,relative_strength_score",
     )
     .eq("analysis_model_id", model.id)
     .eq("symbol_id", symbol.id)
@@ -949,6 +952,9 @@ async function scanIndicatorModel(
     relative_strength_win_rate: symbol.symbol === "BTCUSDT"
       ? 0.5
       : btc.relativeStrength?.winRate ?? null,
+    // Hand the current score to the previous-cycle slot; the refresh that
+    // follows this scan writes the new one on top.
+    previous_relative_strength_score: previous?.relative_strength_score ?? null,
     breakout_triggered: scoreLayers.breakoutTriggered,
     trend_score: trend?.score ?? null,
     trend_entry: aPlusJourney,

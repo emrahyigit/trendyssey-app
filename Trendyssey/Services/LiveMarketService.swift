@@ -26,6 +26,7 @@ struct LiveMarketService: MarketService {
         let breakout_confidence_score: Int
         let regime_score: Int?
         let relative_strength_score: Int?
+        let previous_relative_strength_score: Int?
         let readiness_score: Int?
         let breakout_quality_score: Int?
         let confirmation_score: Int?
@@ -59,7 +60,7 @@ struct LiveMarketService: MarketService {
     private func loadSignals(universeLimit: Int?) async throws -> MarketOverview {
         var components = URLComponents(url: SupabaseConfig.projectURL.appending(path: "rest/v1/breakout_signals"), resolvingAgainstBaseURL: false)!
         components.queryItems = [
-            .init(name: "select", value: "id,journey_id,signal_price,signal_time,breakout_confidence_score,regime_score,readiness_score,breakout_quality_score,confirmation_score,relative_strength_score,breakout_triggered,false_breakout_risk,market_activity_score,volume_ratio,estimated_volume_delta,taker_buy_ratio,explanation,explanation_facts,trend_score,trend_entry,analysis_models!inner(slug),symbols(symbol,base_asset,icon_url,current_price,price_change_percent_24h,quote_volume_24h)"),
+            .init(name: "select", value: "id,journey_id,signal_price,signal_time,breakout_confidence_score,regime_score,readiness_score,breakout_quality_score,confirmation_score,relative_strength_score,previous_relative_strength_score,breakout_triggered,false_breakout_risk,market_activity_score,volume_ratio,estimated_volume_delta,taker_buy_ratio,explanation,explanation_facts,trend_score,trend_entry,analysis_models!inner(slug),symbols(symbol,base_asset,icon_url,current_price,price_change_percent_24h,quote_volume_24h)"),
             .init(name: "order", value: "signal_time.desc"),
             .init(name: "timeframe", value: "eq.\(AnalysisTimeframe.selected.rawValue)"),
             .init(name: "analysis_models.slug", value: "eq.\(AnalysisModelSelection.selectedSlug)"),
@@ -81,7 +82,7 @@ struct LiveMarketService: MarketService {
         let selectedUniverse = universeLimit.map { Array(active.prefix($0)) } ?? active
         let universe = Set(selectedUniverse.map(\.symbol))
         let mapped = rows.filter { universe.contains($0.symbols.symbol) }.map { row in
-            MarketSignal(id: row.id, journeyID: row.journey_id, symbol: row.symbols.symbol, name: row.symbols.base_asset, iconURL: row.symbols.icon_url, price: row.symbols.current_price ?? row.signal_price, change24h: row.symbols.price_change_percent_24h ?? 0, quoteVolume24h: row.symbols.quote_volume_24h ?? 0, confidence: row.breakout_quality_score ?? row.breakout_confidence_score, regimeScore: row.regime_score ?? row.explanation_facts?.scoreLayers?.regimeScore ?? 0, readinessScore: row.readiness_score ?? row.explanation_facts?.scoreLayers?.readinessScore ?? 0, breakoutQualityScore: row.breakout_quality_score ?? row.breakout_confidence_score, confirmationScore: row.confirmation_score ?? row.explanation_facts?.scoreLayers?.confirmationScore ?? 0, relativeStrengthScore: row.relative_strength_score, breakoutTriggered: row.breakout_triggered ?? row.explanation_facts?.scoreLayers?.breakoutTriggered ?? false, falseBreakoutRisk: row.false_breakout_risk, activityScore: row.market_activity_score, volumeRatio: row.volume_ratio ?? 0, takerBuyRatio: row.taker_buy_ratio ?? 0.5, estimatedDelta: row.estimated_volume_delta ?? 0, signalDate: row.signal_time, explanation: row.explanation, evidence: row.explanation_facts, trendScore: row.trend_score, trendEntry: row.trend_entry ?? false, marketState: marketStates[row.symbols.symbol])
+            MarketSignal(id: row.id, journeyID: row.journey_id, symbol: row.symbols.symbol, name: row.symbols.base_asset, iconURL: row.symbols.icon_url, price: row.symbols.current_price ?? row.signal_price, change24h: row.symbols.price_change_percent_24h ?? 0, quoteVolume24h: row.symbols.quote_volume_24h ?? 0, confidence: row.breakout_quality_score ?? row.breakout_confidence_score, regimeScore: row.regime_score ?? row.explanation_facts?.scoreLayers?.regimeScore ?? 0, readinessScore: row.readiness_score ?? row.explanation_facts?.scoreLayers?.readinessScore ?? 0, breakoutQualityScore: row.breakout_quality_score ?? row.breakout_confidence_score, confirmationScore: row.confirmation_score ?? row.explanation_facts?.scoreLayers?.confirmationScore ?? 0, relativeStrengthScore: row.relative_strength_score, previousSignalStrength: row.previous_relative_strength_score, breakoutTriggered: row.breakout_triggered ?? row.explanation_facts?.scoreLayers?.breakoutTriggered ?? false, falseBreakoutRisk: row.false_breakout_risk, activityScore: row.market_activity_score, volumeRatio: row.volume_ratio ?? 0, takerBuyRatio: row.taker_buy_ratio ?? 0.5, estimatedDelta: row.estimated_volume_delta ?? 0, signalDate: row.signal_time, explanation: row.explanation, evidence: row.explanation_facts, trendScore: row.trend_score, trendEntry: row.trend_entry ?? false, marketState: marketStates[row.symbols.symbol])
         }
         var seenSymbols = Set<String>()
         let signals = mapped

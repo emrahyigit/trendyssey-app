@@ -15,6 +15,30 @@ struct APlusSetupBadge: View {
     }
 }
 
+
+/// Change since the previous scan cycle, as a compact capsule: green up,
+/// red down, gray flat. Hidden while either side of the delta is unknown.
+struct SignalStrengthDeltaBadge: View {
+    let delta: Int
+
+    private var tint: Color {
+        delta > 0 ? TrendysseyColor.positive : delta < 0 ? TrendysseyColor.negative : TrendysseyColor.secondaryText
+    }
+
+    var body: some View {
+        HStack(spacing: 3) {
+            Image(systemName: delta > 0 ? "arrow.up" : delta < 0 ? "arrow.down" : "minus")
+                .font(.system(size: 9, weight: .black))
+            Text("\(abs(delta))")
+                .font(.caption.bold()).monospacedDigit()
+        }
+        .foregroundStyle(tint)
+        .padding(.horizontal, 7).padding(.vertical, 4)
+        .background(tint.opacity(0.12), in: Capsule())
+        .accessibilityLabel(L10n.text("Change since previous scan: \(delta)", "Önceki taramaya göre değişim: \(delta)"))
+    }
+}
+
 struct FeaturedSignalCard: View {
     let signal: MarketSignal
 
