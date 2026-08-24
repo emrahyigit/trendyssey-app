@@ -269,8 +269,13 @@ struct TopPredictorsView: View {
 
 struct PredictorDailyCallsView: View {
     let predictor: TopPredictor
+    @Environment(AppEnvironment.self) private var environment
     @State private var calls: [PredictorDailyCall] = []
     @State private var isLoading = true
+    /// Tapping a call opens the coin, so the page needs the live signal behind
+    /// each symbol. Loaded alongside the calls to keep the tap instant.
+    @State private var signalsBySymbol: [String: MarketSignal] = [:]
+    @State private var selectedSignal: MarketSignal?
 
     var body: some View {
         ScrollView {
@@ -287,8 +292,15 @@ struct PredictorDailyCallsView: View {
                         VStack(alignment: .trailing, spacing: 2) {
                             Text(predictor.totalScore.formatted(.number.precision(.fractionLength(0...2))))
                                 .font(.title2.bold()).monospacedDigit()
-                            Text(L10n.text("points", "puan"))
-                                .font(.caption2).foregroundStyle(TrendysseyColor.secondaryText)
+                            if let accuracy = predictor.accuracyPercent {
+                                Text(L10n.text(
+                                    "\(accuracy)% accuracy (\(predictor.scoredCount))",
+                                    "%\(accuracy) isabet (\(predictor.scoredCount))"
+                                ))
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(accuracy >= 50 ? TrendysseyColor.positive : TrendysseyColor.negative)
+                                .padding(.top, 3)
+                            }
                         }
                     }
                 }
@@ -306,7 +318,14 @@ struct PredictorDailyCallsView: View {
                 } else {
                     LazyVStack(spacing: 10) {
                         ForEach(calls) { call in
-                            SurfaceCard { callRow(call) }
+                            if let signal = signalsBySymbol[call.symbol] {
+                                Button { selectedSignal = signal } label: {
+                                    SurfaceCard { callRow(call) }
+                                }
+                                .buttonStyle(.plain)
+                            } else {
+                                SurfaceCard { callRow(call) }
+                            }
                         }
                     }
                 }
@@ -316,6 +335,7 @@ struct PredictorDailyCallsView: View {
         .background(TrendysseyColor.canvas.ignoresSafeArea())
         .navigationTitle(predictor.displayName)
         .navigationBarTitleDisplayMode(.inline)
+        .navigationDestination(item: $selectedSignal) { SignalDetailView(signal: $0) }
         .task { await load() }
         .refreshable { await load() }
     }
@@ -328,8 +348,14 @@ struct PredictorDailyCallsView: View {
             : L10n.text("Finalizes \(remaining)", "\(remaining) kesinleşir")
         return VStack(alignment: .leading, spacing: 11) {
             HStack {
+                SymbolMark(symbol: call.symbol.replacingOccurrences(of: "USDT", with: ""), iconURL: signalsBySymbol[call.symbol]?.iconURL)
                 Text(call.symbol.replacingOccurrences(of: "USDT", with: ""))
                     .font(.headline)
+                if signalsBySymbol[call.symbol] != nil {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(TrendysseyColor.secondaryText)
+                }
                 Label(call.direction.title, systemImage: call.direction.systemImage)
                     .font(.caption.bold()).foregroundStyle(tint)
                     .padding(.horizontal, 7).padding(.vertical, 4)
@@ -365,7 +391,17 @@ struct PredictorDailyCallsView: View {
 
     @MainActor private func load() async {
         isLoading = true
-        calls = (try? await SignalPredictionService().dailyCalls(userID: predictor.userID)) ?? []
+        async let callsTask = try? SignalPredictionService().dailyCalls(userID: predictor.userID)
+        async let overviewTask = try? environment.marketService.overview()
+        calls = await callsTask ?? []
+        // A coin outside the scanned universe simply stays untappable rather
+        // than opening a detail page with nothing on it.
+        if let overview = await overviewTask {
+            signalsBySymbol = Dictionary(
+                overview.signals.map { ($0.symbol, $0) },
+                uniquingKeysWith: { first, _ in first }
+            )
+        }
         isLoading = false
     }
 

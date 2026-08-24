@@ -24,9 +24,21 @@ struct TopPredictor: Identifiable, Sendable {
     let position: Int
     let totalScore: Double
     let predictionCount: Int
+    /// Calls in the last 30 days and how many are pointing the right way. Like
+    /// the points total, this includes calls still inside their 24 hours at
+    /// their current standing — one can still flip before it settles.
+    let scoredCount: Int
+    let correctCount: Int
     let isCurrentUser: Bool
 
     var id: UUID { userID }
+
+    /// Nil until at least one call has resolved, so the screen can say "not
+    /// enough calls yet" instead of showing a confident 0%.
+    var accuracyPercent: Int? {
+        guard scoredCount > 0 else { return nil }
+        return Int((Double(correctCount) / Double(scoredCount) * 100).rounded())
+    }
 }
 
 enum DailyPredictionDirection: String, Codable, CaseIterable, Sendable {
@@ -119,6 +131,8 @@ actor SignalPredictionService {
         let avatar_key: String?
         let total_score: Double
         let prediction_count: Int
+        let scored_count: Int
+        let correct_count: Int
         let is_current_user: Bool
     }
 
@@ -159,6 +173,8 @@ actor SignalPredictionService {
                 position: row.rank_position,
                 totalScore: row.total_score,
                 predictionCount: row.prediction_count,
+                scoredCount: row.scored_count,
+                correctCount: row.correct_count,
                 isCurrentUser: row.is_current_user
             )
         }
