@@ -126,10 +126,11 @@ private struct ContestRow: View {
                 }
             }
             .frame(height: 5)
-            Text(explanation)
+            Text(reading)
                 .font(.caption2)
                 .foregroundStyle(TrendysseyColor.secondaryText)
                 .lineSpacing(2)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
@@ -168,7 +169,7 @@ private struct ContestRow: View {
             : L10n.text(", down \(abs(change))", ", \(abs(change)) azaldı")
     }
 
-    private var explanation: String {
+    private var reading: String {
         switch pair.id {
         case "pressure":
             switch pair.leader {

@@ -93,12 +93,20 @@ struct DashboardView: View {
     }
 
     @ViewBuilder private func content(_ overview: MarketOverview) -> some View {
-        // Spot users can only be long, so the home screen carries one buy-side
-        // list. Rank runs down the cycle rather than by score alone: a handover
-        // that just happened is a fresher entry than a move already running.
-        // The slider is the turn window: control just changed hands, the
-        // selling that held price down has died, or it is still being absorbed.
-        // Dominance is deliberately absent — by then the move has happened.
+        // The carousel answers what people open the app for: what is running
+        // today. Volume follows those coins, so it leads.
+        let gainers = overview.signals
+            .filter { $0.change24h > 0 }
+            .sorted {
+                if $0.change24h != $1.change24h { return $0.change24h > $1.change24h }
+                return $0.quoteVolume24h > $1.quoteVolume24h
+            }
+            .prefix(10)
+        // The list underneath is the part the engine is actually for: coins
+        // where control is changing hands. Rank runs down the cycle rather than
+        // by score alone — a handover that just happened is a fresher entry
+        // than a move already running, and dominance is absent because by then
+        // the move has happened.
         let turnRank: (MarketStateKind) -> Int = { state in
             switch state {
             case .buyerTakeover: 3
@@ -106,11 +114,6 @@ struct DashboardView: View {
             case .buySideAbsorption: 1
             default: 0
             }
-        }
-        // One step earlier on the cycle: sellers still landing blows, just
-        // fewer of them. Not a turn yet.
-        let wateringRank: (MarketStateKind) -> Int = { state in
-            state == .sellerImpactFading ? 1 : 0
         }
         let ranked = { (rank: @escaping (MarketStateKind) -> Int, limit: Int) in
             overview.signals
@@ -126,9 +129,25 @@ struct DashboardView: View {
                 }
                 .prefix(limit)
         }
-        let turning = Array(ranked(turnRank, 10))
-        let watching = Array(ranked(wateringRank, 7))
+        let turning = Array(ranked(turnRank, 7))
 
+        VStack(alignment: .leading, spacing: 12) {
+            sectionTitle(
+                L10n.text("Today's Gainers", "Bugün Yükselenler"),
+                subtitle: L10n.text(
+                    "Biggest 24-hour risers in the scanned universe.",
+                    "Taranan evrende 24 saatte en çok yükselenler."
+                )
+            )
+            if gainers.isEmpty {
+                emptyRow(
+                    L10n.text("Nothing is up over 24 hours", "24 saatte yükselen yok"),
+                    icon: "chart.line.uptrend.xyaxis"
+                )
+            } else {
+                carousel(Array(gainers))
+            }
+        }
         VStack(alignment: .leading, spacing: 12) {
             sectionTitle(
                 L10n.text("The Turn Window", "Dönüş Penceresi"),
@@ -139,31 +158,11 @@ struct DashboardView: View {
             )
             if turning.isEmpty {
                 emptyRow(
-                    L10n.text(
-                        "No coin is turning right now",
-                        "Şu anda dönen bir coin yok"
-                    ),
+                    L10n.text("No coin is turning right now", "Şu anda dönen bir coin yok"),
                     icon: "arrow.turn.up.right"
                 )
             } else {
-                carousel(turning)
-            }
-        }
-        VStack(alignment: .leading, spacing: 12) {
-            sectionTitle(
-                L10n.text("Selling Losing Its Grip", "Satış Gücünü Yitiriyor"),
-                subtitle: L10n.text(
-                    "Sellers are still landing blows, just fewer of them. One step before the turn window.",
-                    "Satıcılar hâlâ vuruyor ama daha azı tutuyor. Dönüş penceresinden bir adım önce."
-                )
-            )
-            if watching.isEmpty {
-                emptyRow(
-                    L10n.text("No coin shows selling losing its grip", "Satışın gücünü yitirdiği bir coin yok"),
-                    icon: "waveform.path.ecg"
-                )
-            } else {
-                ForEach(watching) { signal in
+                ForEach(turning) { signal in
                     NavigationLink(value: signal) { SignalRow(signal: signal) }.buttonStyle(.plain)
                 }
             }

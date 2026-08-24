@@ -54,17 +54,25 @@ struct FeaturedSignalCard: View {
                                  : L10n.text("CURRENT STATE", "GÜNCEL DURUM"))
                                 .font(.caption2.bold()).foregroundStyle(TrendysseyColor.secondaryText)
                             if state.hasActiveState {
+                                // 52pt with a "/ 100" tail made a three-digit
+                                // score both too wide and too tall for the
+                                // carousel to hold, and the card clipped. The
+                                // label above already says this is a strength,
+                                // so the denominator was spending space to
+                                // repeat itself.
                                 Text("\(state.stateScore)")
-                                    .font(.system(size: 52, weight: .bold, design: .rounded))
+                                    .font(.system(size: 34, weight: .bold, design: .rounded))
                                     .monospacedDigit()
                                     .foregroundStyle(state.state.color)
-                                    + Text(" / 100").font(.subheadline).foregroundColor(TrendysseyColor.secondaryText)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.6)
                             } else {
                                 Text(L10n.text("No active state", "Aktif durum yok"))
                                     .font(.title2.bold())
                                     .foregroundStyle(TrendysseyColor.secondaryText)
                             }
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     } else {
                         VStack(alignment: .leading, spacing: 5) {
                             Text(L10n.text("CURRENT STATE", "GÜNCEL DURUM"))
@@ -73,17 +81,20 @@ struct FeaturedSignalCard: View {
                                 .font(.title2.bold())
                                 .foregroundStyle(TrendysseyColor.secondaryText)
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    Spacer()
                     VStack(alignment: .trailing, spacing: 3) {
                         Text(L10n.text("24H VOLUME", "24S HACİM"))
                             .font(.caption2.bold())
                             .foregroundStyle(TrendysseyColor.secondaryText)
                         Text("$\(signal.quoteVolume24h.formatted(.number.notation(.compactName).precision(.significantDigits(3)).locale(L10n.locale)))")
-                            .font(.title2.bold())
+                            .font(.title3.bold())
                             .monospacedDigit()
                             .foregroundStyle(TrendysseyColor.accent)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.6)
                     }
+                    .frame(maxWidth: .infinity, alignment: .trailing)
                 }
             }
         }
