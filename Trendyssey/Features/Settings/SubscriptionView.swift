@@ -66,60 +66,24 @@ struct SubscriptionView: View {
 
     private var proMark: some View {
         ZStack {
-            ZStack {
-                LinearGradient(
-                    colors: [
-                        Color(red: 1.0, green: 0.78, blue: 0.08),
-                        Color(red: 1.0, green: 0.91, blue: 0.45),
-                        Color(red: 1.0, green: 0.97, blue: 0.76)
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                Rectangle()
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                Color(red: 0.62, green: 0.88, blue: 1.0).opacity(0.72),
-                                Color(red: 0.28, green: 0.72, blue: 0.96).opacity(0.88)
-                            ],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
-                    .frame(width: 120, height: 31)
-                    .blur(radius: 5)
-                    .offset(y: 39)
-                Ellipse()
-                    .fill(Color(red: 0.53, green: 0.85, blue: 1.0).opacity(0.68))
-                    .frame(width: 142, height: 31)
-                    .blur(radius: 8)
-                    .offset(x: 2, y: 29)
-                Ellipse()
-                    .fill(Color(red: 1.0, green: 0.92, blue: 0.50).opacity(0.58))
-                    .frame(width: 104, height: 17)
-                    .blur(radius: 7)
-                    .offset(x: -2, y: 21)
-            }
-            .frame(width: 104, height: 104)
-            .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 28, style: .continuous)
-                    .stroke(
-                        LinearGradient(
-                            colors: [.white.opacity(0.82), .white.opacity(0.20), Color.blue.opacity(0.22)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        ),
-                        lineWidth: 1.25
-                    )
-            }
-            .shadow(color: Color(red: 0.20, green: 0.56, blue: 0.90).opacity(0.28), radius: 24, y: 12)
+            // Pro inverts the app icon: the same mark, black tile, yellow
+            // letter. The earlier version buried it under blue and yellow
+            // gradients, which read as a different product rather than the
+            // paid tier of this one.
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .fill(Color(red: 0.02, green: 0.02, blue: 0.03))
+                .frame(width: 104, height: 104)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 28, style: .continuous)
+                        .stroke(TrendysseyColor.accent.opacity(0.55), lineWidth: 1.25)
+                }
+                .shadow(color: .black.opacity(0.35), radius: 18, y: 10)
             Image("TrendysseyLogoMark")
                 .resizable()
+                .renderingMode(.template)
                 .scaledToFit()
-                .frame(width: 84, height: 84)
-                .shadow(color: Color(red: 0.62, green: 0.43, blue: 0.04).opacity(0.18), radius: 2.5, y: 1.5)
+                .frame(width: 62, height: 62)
+                .foregroundStyle(TrendysseyColor.accent)
         }
         .accessibilityLabel("Trendyssey Pro")
     }

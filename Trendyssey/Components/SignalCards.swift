@@ -28,9 +28,7 @@ struct FeaturedSignalCard: View {
                             Text(signal.baseSymbol).font(.title2.bold())
                             if signal.isAPlusSetup { APlusSetupBadge() }
                         }
-                        if let state = signal.marketState {
-                            Text(state.state.title).font(.caption).foregroundStyle(state.state.color)
-                        } else {
+                        if signal.marketState == nil {
                             Text(L10n.text("State updating", "Durum güncelleniyor"))
                                 .font(.caption).foregroundStyle(TrendysseyColor.secondaryText)
                         }
@@ -92,8 +90,39 @@ struct FeaturedSignalCard: View {
     }
 }
 
+/// State strength as a chart-marked badge, for rows too tight to spell out the
+/// state and its score separately.
+struct StateScoreBadge: View {
+    let snapshot: MarketStateSnapshot
+
+    var body: some View {
+        // Hand-built rather than a Label: in a tight row Label lets its title
+        // compress until the number wraps onto its own lines, which is what
+        // made the badge unreadable.
+        HStack(spacing: 3) {
+            Image(systemName: "chart.bar.fill")
+                .font(.system(size: 8, weight: .bold))
+            Text("\(snapshot.stateScore)")
+                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .monospacedDigit()
+        }
+            .lineLimit(1)
+            .fixedSize()
+            .foregroundStyle(snapshot.state.color)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(snapshot.state.color.opacity(0.14), in: Capsule())
+            .accessibilityLabel(L10n.text(
+                "State strength \(snapshot.stateScore) of 100",
+                "Durum gücü 100 üzerinden \(snapshot.stateScore)"
+            ))
+    }
+}
+
 struct SignalRow: View {
     let signal: MarketSignal
+    /// The scanner lists every coin for lookup, so it does not pitch setups.
+    var showsAPlus = true
 
     var body: some View {
         HStack(spacing: 13) {
@@ -101,8 +130,11 @@ struct SignalRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
                     Text(signal.baseSymbol).font(.headline)
-                        .lineLimit(1).minimumScaleFactor(0.8)
-                    if signal.isAPlusSetup { APlusSetupBadge() }
+                        .lineLimit(1).minimumScaleFactor(0.7).layoutPriority(1)
+                    if let state = signal.marketState, state.hasActiveState {
+                        StateScoreBadge(snapshot: state)
+                    }
+                    if showsAPlus, signal.isAPlusSetup { APlusSetupBadge() }
                 }
                 if signal.hasScore {
                     Text(signal.marketState?.state.title ?? L10n.text("State updating", "Durum güncelleniyor"))
@@ -137,8 +169,21 @@ struct SymbolMark: View {
     @State private var icon: UIImage?
     var body: some View {
         Group {
-            if let icon { Image(uiImage: icon).resizable().scaledToFit().padding(5) }
-            else { Color.clear }
+            if let icon {
+                Image(uiImage: icon).resizable().scaledToFit().padding(5)
+            } else {
+                // The public icon CDNs do not carry every listing, and a blank
+                // 42pt hole reads as a broken row. A monogram always renders.
+                Text(symbol.prefix(3))
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                    .foregroundStyle(TrendysseyColor.secondaryText)
+                    .minimumScaleFactor(0.6)
+                    .lineLimit(1)
+                    .padding(4)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(TrendysseyColor.elevated, in: Circle())
+                    .overlay(Circle().stroke(TrendysseyColor.border, lineWidth: 0.5))
+            }
         }
         .frame(width: 42, height: 42)
         .accessibilityLabel(L10n.text("\(symbol) icon", "\(symbol) ikonu"))
