@@ -104,6 +104,29 @@ struct SignalScoreComponent: Codable, Hashable, Sendable, Identifiable {
     var id: String { key }
 }
 
+struct TrendScoreComponents: Codable, Hashable, Sendable {
+    let breakout: Int
+    let regime: Int
+    let momentum: Int
+    let health: Int
+}
+
+/// The backend trend model (supabase `_shared/trend_score.ts`): Donchian-55
+/// breakout + EMA25/99 regime + 20-candle momentum vs BTC + chandelier health.
+/// The four components always sum to `score`.
+struct TrendScoreFacts: Codable, Hashable, Sendable {
+    let score: Int
+    let entrySignal: Bool
+    let components: TrendScoreComponents
+    let breakoutLevel: Double?
+    let clearanceAtr: Double?
+    let freshBreakout: Bool?
+    let regimeAligned: Bool?
+    let momentumExcess: Double?
+    /// Suggested trailing invalidation: 22-candle high minus 3×ATR.
+    let chandelierStop: Double?
+}
+
 struct SignalEvidence: Codable, Hashable, Sendable {
     let model: String?
     let nearBreakout: Bool?
@@ -138,6 +161,7 @@ struct SignalEvidence: Codable, Hashable, Sendable {
     let bollingerBandWidthChangePercent: Double?
     let quoteVolume24h: Double?
     let scoreComponents: [SignalScoreComponent]?
+    let trendScore: TrendScoreFacts?
 }
 
 struct MarketSignal: Identifiable, Codable, Hashable, Sendable {
@@ -160,6 +184,8 @@ struct MarketSignal: Identifiable, Codable, Hashable, Sendable {
     let explanation: String
     let evidence: SignalEvidence?
     let hasScore: Bool
+    let trendScore: Int?
+    let trendEntry: Bool
 
     nonisolated init(
         id: UUID,
@@ -180,7 +206,9 @@ struct MarketSignal: Identifiable, Codable, Hashable, Sendable {
         signalDate: Date,
         explanation: String,
         evidence: SignalEvidence? = nil,
-        hasScore: Bool = true
+        hasScore: Bool = true,
+        trendScore: Int? = nil,
+        trendEntry: Bool = false
     ) {
         self.id = id
         self.journeyID = journeyID
@@ -201,6 +229,8 @@ struct MarketSignal: Identifiable, Codable, Hashable, Sendable {
         self.explanation = explanation
         self.evidence = evidence
         self.hasScore = hasScore
+        self.trendScore = trendScore
+        self.trendEntry = trendEntry
     }
 
     var baseSymbol: String { symbol.replacingOccurrences(of: "USDT", with: "") }
@@ -208,6 +238,10 @@ struct MarketSignal: Identifiable, Codable, Hashable, Sendable {
     var qualityTitle: String {
         L10n.text("Signal strength", "Sinyal gücü")
     }
+    var trendFacts: TrendScoreFacts? { evidence?.trendScore }
+    /// Prefers the dedicated column; falls back to the explanation facts.
+    var effectiveTrendScore: Int? { trendScore ?? trendFacts?.score }
+    var isAPlusSetup: Bool { trendEntry || trendFacts?.entrySignal == true }
 }
 
 struct MarketOverview: Sendable {

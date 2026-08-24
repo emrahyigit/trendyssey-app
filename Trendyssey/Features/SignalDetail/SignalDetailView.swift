@@ -46,6 +46,9 @@ struct SignalDetailView: View {
                 if liveAnalysisAllowed {
                     SurfaceCard { journeyCard }
                     SurfaceCard { confidenceCard }
+                    if let trendFacts = signal.trendFacts {
+                        SurfaceCard { trendCard(trendFacts) }
+                    }
                 } else {
                     SurfaceCard { proTeaser }
                 }
@@ -350,16 +353,151 @@ struct SignalDetailView: View {
         }
     }
 
-    private func factorIcon(_ factor: ConfidenceFactor) -> String {
-        switch factor.strength {
+    private func factorIcon(_ factor: ConfidenceFactor) -> String { strengthIcon(factor.strength) }
+
+    private func factorColor(_ factor: ConfidenceFactor) -> Color { strengthColor(factor.strength) }
+
+    // MARK: - Trend score
+
+    private struct TrendComponentRow: Identifiable {
+        let id: String
+        let title: String
+        let detail: String
+        let score: Int
+        let maxScore: Int
+
+        var strength: Double { maxScore > 0 ? Double(score) / Double(maxScore) : 0 }
+    }
+
+    private func trendComponentRows(_ facts: TrendScoreFacts) -> [TrendComponentRow] {
+        [
+            TrendComponentRow(
+                id: "breakout",
+                title: L10n.text("Breakout", "Kırılım"),
+                detail: L10n.text(
+                    "How decisively the close clears the highest high of the prior 55 candles.",
+                    "Kapanışın önceki 55 mumun zirvesini ne kadar net aştığı."
+                ),
+                score: facts.components.breakout,
+                maxScore: 40
+            ),
+            TrendComponentRow(
+                id: "regime",
+                title: L10n.text("Trend regime", "Trend rejimi"),
+                detail: L10n.text(
+                    "EMA 25 above EMA 99 with price holding above EMA 99.",
+                    "EMA 25'in EMA 99'un üzerinde olması ve fiyatın EMA 99'un üstünde kalması."
+                ),
+                score: facts.components.regime,
+                maxScore: 25
+            ),
+            TrendComponentRow(
+                id: "momentum",
+                title: L10n.text("Momentum vs BTC", "BTC'ye karşı momentum"),
+                detail: L10n.text(
+                    "The last 20 candles' return compared with Bitcoin's over the same window.",
+                    "Son 20 mumun getirisinin aynı dönemde Bitcoin ile karşılaştırması."
+                ),
+                score: facts.components.momentum,
+                maxScore: 20
+            ),
+            TrendComponentRow(
+                id: "health",
+                title: L10n.text("Trend health", "Trend sağlığı"),
+                detail: L10n.text(
+                    "Distance above the 3×ATR chandelier trailing stop; zero when price is at the stop.",
+                    "Fiyatın 3×ATR chandelier iz süren stopunun üzerindeki mesafesi; stop seviyesinde sıfırlanır."
+                ),
+                score: facts.components.health,
+                maxScore: 15
+            ),
+        ]
+    }
+
+    private func trendCard(_ facts: TrendScoreFacts) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 8) {
+                Label(L10n.text("Trend Score", "Trend Puanı"), systemImage: "chart.line.uptrend.xyaxis")
+                    .font(.headline)
+                Spacer()
+                if facts.entrySignal { APlusSetupBadge() }
+            }
+            HStack(alignment: .firstTextBaseline) {
+                Text("\(facts.score)").font(.system(size: 52, weight: .bold, design: .rounded)).monospacedDigit()
+                    + Text(" / 100").font(.subheadline).foregroundColor(TrendysseyColor.secondaryText)
+                Spacer()
+                Text(TrendScoreStyle.levelTitle(facts.score))
+                    .font(.caption.bold())
+                    .foregroundStyle(TrendScoreStyle.color(facts.score))
+                    .padding(.horizontal, 10).padding(.vertical, 6)
+                    .background(TrendScoreStyle.color(facts.score).opacity(0.12), in: Capsule())
+            }
+            GeometryReader { proxy in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(TrendysseyColor.border)
+                    Capsule()
+                        .fill(TrendScoreStyle.color(facts.score))
+                        .frame(width: max(6, proxy.size.width * CGFloat(facts.score) / 100))
+                }
+            }
+            .frame(height: 6)
+            if facts.entrySignal {
+                Label(
+                    L10n.text(
+                        "A+ setup: a fresh 55-candle breakout with the trend regime and momentum aligned — the backtested strongest entry.",
+                        "A+ kurulum: trend rejimi ve momentum hizalıyken taze 55 mum kırılımı — geriye dönük testteki en güçlü giriş."
+                    ),
+                    systemImage: "star.circle.fill"
+                )
+                .font(.caption).foregroundStyle(TrendysseyColor.accent).lineSpacing(3)
+            }
+            Divider()
+            Text(L10n.text("Why this score?", "Bu puan neden verildi?")).font(.subheadline.bold())
+            ForEach(trendComponentRows(facts)) { row in trendComponentRow(row) }
+            if let stop = facts.chandelierStop {
+                Divider()
+                Label(
+                    L10n.text(
+                        "Suggested trailing invalidation: $\(stop.formatted(.number.precision(.fractionLength(2...6)))). A close below this chandelier stop weakens the trend.",
+                        "Önerilen iz süren geçersizlik seviyesi: $\(stop.formatted(.number.precision(.fractionLength(2...6)))). Bu chandelier stopunun altındaki kapanış trendi zayıflatır."
+                    ),
+                    systemImage: "arrow.down.to.line"
+                )
+                .font(.caption).foregroundStyle(TrendysseyColor.secondaryText).lineSpacing(3)
+            }
+            Text(L10n.text("Data is a statistical assessment, not investment advice.", "Veriler istatistiksel değerlendirmedir; yatırım tavsiyesi değildir."))
+                .font(.caption2).foregroundStyle(TrendysseyColor.secondaryText)
+        }
+    }
+
+    private func trendComponentRow(_ row: TrendComponentRow) -> some View {
+        HStack(alignment: .top, spacing: 9) {
+            Image(systemName: strengthIcon(row.strength))
+                .foregroundStyle(strengthColor(row.strength)).font(.caption)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(row.title).font(.caption.bold())
+                Text(row.detail)
+                    .font(.caption2).foregroundStyle(TrendysseyColor.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            Text("\(row.score)/\(row.maxScore)")
+                .font(.caption.bold()).monospacedDigit().foregroundStyle(strengthColor(row.strength))
+                .padding(.horizontal, 7).padding(.vertical, 4)
+                .background(strengthColor(row.strength).opacity(0.10), in: Capsule())
+        }
+    }
+
+    private func strengthIcon(_ strength: Double) -> String {
+        switch strength {
         case 0.66...: "checkmark.circle.fill"
         case 0.33..<0.66: "minus.circle.fill"
         default: "exclamationmark.circle.fill"
         }
     }
 
-    private func factorColor(_ factor: ConfidenceFactor) -> Color {
-        switch factor.strength {
+    private func strengthColor(_ strength: Double) -> Color {
+        switch strength {
         case 0.66...: TrendysseyColor.positive
         case 0.33..<0.66: TrendysseyColor.warning
         default: TrendysseyColor.negative

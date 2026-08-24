@@ -64,7 +64,7 @@ actor UserSyncService {
     }
 
     private struct SubscriptionEntitlement: Decodable {
-        let status: String
+        let is_active: Bool
         let expires_at: String
     }
 
@@ -203,7 +203,9 @@ actor UserSyncService {
                 resolvingAgainstBaseURL: false
             )!
             components.queryItems = [
-                .init(name: "select", value: "status,expires_at"),
+                .init(name: "select", value: "is_active,expires_at"),
+                .init(name: "is_active", value: "eq.true"),
+                .init(name: "order", value: "expires_at.desc"),
                 .init(name: "limit", value: "1"),
             ]
             var request = URLRequest(url: components.url!)
@@ -215,7 +217,7 @@ actor UserSyncService {
                 return false
             }
             guard let entitlement = try JSONDecoder().decode([SubscriptionEntitlement].self, from: data).first,
-                  ["active", "grace_period"].contains(entitlement.status),
+                  entitlement.is_active,
                   let expiry = Self.entitlementDate(entitlement.expires_at) else {
                 return false
             }

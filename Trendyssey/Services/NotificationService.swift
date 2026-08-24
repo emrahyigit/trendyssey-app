@@ -25,6 +25,8 @@ actor NotificationService {
             let taker_buy_ratio: Double?
             let explanation: String
             let explanation_facts: SignalEvidence?
+            let trend_score: Int?
+            let trend_entry: Bool?
             let symbols: Symbol
         }
 
@@ -40,7 +42,7 @@ actor NotificationService {
     func notifications() async throws -> [AppNotification] {
         var components = URLComponents(url: SupabaseConfig.projectURL.appending(path: "rest/v1/notifications"), resolvingAgainstBaseURL: false)!
         components.queryItems = [
-            .init(name: "select", value: "id,title,body,status,signal_status,created_at,breakout_signals(id,journey_id,status,signal_price,signal_time,breakout_confidence_score,false_breakout_risk,market_activity_score,volume_ratio,estimated_volume_delta,taker_buy_ratio,explanation,explanation_facts,symbols(symbol,base_asset,icon_url,current_price,price_change_percent_24h,quote_volume_24h))"),
+            .init(name: "select", value: "id,title,body,status,signal_status,created_at,breakout_signals(id,journey_id,status,signal_price,signal_time,breakout_confidence_score,false_breakout_risk,market_activity_score,volume_ratio,estimated_volume_delta,taker_buy_ratio,explanation,explanation_facts,trend_score,trend_entry,symbols(symbol,base_asset,icon_url,current_price,price_change_percent_24h,quote_volume_24h))"),
             .init(name: "notification_type", value: "eq.breakout_signal"),
             .init(name: "order", value: "created_at.desc"),
             .init(name: "limit", value: "100"),
@@ -135,7 +137,9 @@ actor NotificationService {
             status: status(row.status),
             signalDate: signalDate,
             explanation: row.explanation,
-            evidence: row.explanation_facts
+            evidence: row.explanation_facts,
+            trendScore: row.trend_score,
+            trendEntry: row.trend_entry ?? false
         )
     }
 

@@ -1,6 +1,56 @@
 import SwiftUI
 import UIKit
 
+enum TrendScoreStyle {
+    static func color(_ score: Int) -> Color {
+        switch score {
+        case 70...: TrendysseyColor.positive
+        case 45..<70: TrendysseyColor.warning
+        default: TrendysseyColor.secondaryText
+        }
+    }
+
+    static func levelTitle(_ score: Int) -> String {
+        switch score {
+        case 70...: L10n.text("Strong trend", "Güçlü trend")
+        case 45..<70: L10n.text("Developing trend", "Gelişen trend")
+        default: L10n.text("Weak trend", "Zayıf trend")
+        }
+    }
+}
+
+/// Badge for the backtested A+ entry: fresh 55-candle breakout with regime
+/// and momentum aligned (`trend_entry` on the backend).
+struct APlusSetupBadge: View {
+    var body: some View {
+        Text(verbatim: "A+")
+            .font(.system(size: 11, weight: .black, design: .rounded))
+            .foregroundStyle(.black)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(TrendysseyColor.accent, in: Capsule())
+            .overlay(Capsule().stroke(.white.opacity(0.18), lineWidth: 0.5))
+            .accessibilityLabel(L10n.text("A+ setup", "A+ kurulum"))
+    }
+}
+
+struct TrendScoreChip: View {
+    let score: Int
+    var body: some View {
+        HStack(spacing: 3) {
+            Image(systemName: "chart.line.uptrend.xyaxis")
+                .font(.system(size: 8, weight: .bold))
+            Text("\(score)").monospacedDigit()
+        }
+        .font(.caption2.bold())
+        .foregroundStyle(TrendScoreStyle.color(score))
+        .padding(.horizontal, 7)
+        .padding(.vertical, 3)
+        .background(TrendScoreStyle.color(score).opacity(0.12), in: Capsule())
+        .accessibilityLabel(L10n.text("Trend score \(score)", "Trend puanı \(score)"))
+    }
+}
+
 struct FeaturedSignalCard: View {
     let signal: MarketSignal
     @State private var analysis: EMAJourneyAnalysis?
@@ -14,7 +64,10 @@ struct FeaturedSignalCard: View {
                 HStack {
                     SymbolMark(symbol: signal.baseSymbol, iconURL: signal.iconURL)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(signal.baseSymbol).font(.title2.bold())
+                        HStack(spacing: 6) {
+                            Text(signal.baseSymbol).font(.title2.bold())
+                            if signal.isAPlusSetup { APlusSetupBadge() }
+                        }
                         Text(currentPhase.title).font(.caption).foregroundStyle(currentPhase == .watching ? TrendysseyColor.secondaryText : TrendysseyColor.positive)
                     }
                     Spacer()
@@ -31,6 +84,19 @@ struct FeaturedSignalCard: View {
                 HStack(alignment: .bottom) {
                     VStack(alignment: .leading, spacing: 3) { Text(signal.qualityTitle.uppercased()).font(.caption2.bold()).foregroundStyle(TrendysseyColor.secondaryText); Text("\(confidence)").font(.system(size: 52, weight: .bold, design: .rounded)).monospacedDigit() + Text(" / 100").font(.subheadline).foregroundColor(TrendysseyColor.secondaryText) }
                     Spacer()
+                    if let trendScore = signal.effectiveTrendScore {
+                        VStack(spacing: 3) {
+                            Text(L10n.text("TREND", "TREND"))
+                                .font(.caption2.bold())
+                                .foregroundStyle(TrendysseyColor.secondaryText)
+                            Text("\(trendScore)")
+                                .font(.title2.bold())
+                                .monospacedDigit()
+                                .foregroundStyle(TrendScoreStyle.color(trendScore))
+                        }
+                        .accessibilityLabel(L10n.text("Trend score \(trendScore)", "Trend puanı \(trendScore)"))
+                        Spacer()
+                    }
                     VStack(alignment: .trailing, spacing: 3) {
                         Text(L10n.text("24H VOLUME", "24S HACİM"))
                             .font(.caption2.bold())
@@ -65,7 +131,11 @@ struct SignalRow: View {
         HStack(spacing: 13) {
             SymbolMark(symbol: signal.baseSymbol, iconURL: signal.iconURL)
             VStack(alignment: .leading, spacing: 4) {
-                Text(signal.baseSymbol).font(.headline)
+                HStack(spacing: 6) {
+                    Text(signal.baseSymbol).font(.headline)
+                    if let trendScore = signal.effectiveTrendScore { TrendScoreChip(score: trendScore) }
+                    if signal.isAPlusSetup { APlusSetupBadge() }
+                }
                 if !liveAnalysisAllowed {
                     Label(L10n.text("Live analysis with Pro", "Canlı analiz Pro'da"), systemImage: "lock.fill")
                         .font(.caption.weight(.semibold)).foregroundStyle(TrendysseyColor.secondaryText)

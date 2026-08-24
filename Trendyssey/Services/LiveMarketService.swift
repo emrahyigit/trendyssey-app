@@ -32,6 +32,8 @@ struct LiveMarketService: MarketService {
         let taker_buy_ratio: Double
         let explanation: String
         let explanation_facts: SignalEvidence?
+        let trend_score: Int?
+        let trend_entry: Bool?
         let symbols: Symbol
     }
 
@@ -49,7 +51,7 @@ struct LiveMarketService: MarketService {
     private func loadSignals(includeWatching: Bool, universeLimit: Int?) async throws -> MarketOverview {
         var components = URLComponents(url: SupabaseConfig.projectURL.appending(path: "rest/v1/breakout_signals"), resolvingAgainstBaseURL: false)!
         components.queryItems = [
-            .init(name: "select", value: "id,journey_id,status,signal_price,signal_time,breakout_confidence_score,false_breakout_risk,market_activity_score,volume_ratio,estimated_volume_delta,taker_buy_ratio,explanation,explanation_facts,analysis_models!inner(slug),symbols(symbol,base_asset,icon_url,current_price,price_change_percent_24h,quote_volume_24h)"),
+            .init(name: "select", value: "id,journey_id,status,signal_price,signal_time,breakout_confidence_score,false_breakout_risk,market_activity_score,volume_ratio,estimated_volume_delta,taker_buy_ratio,explanation,explanation_facts,trend_score,trend_entry,analysis_models!inner(slug),symbols(symbol,base_asset,icon_url,current_price,price_change_percent_24h,quote_volume_24h)"),
             .init(name: "order", value: "signal_time.desc"),
             .init(name: "timeframe", value: "eq.\(AnalysisTimeframe.selected.rawValue)"),
             .init(name: "analysis_models.slug", value: "eq.\(AnalysisModelSelection.selectedSlug)"),
@@ -67,7 +69,7 @@ struct LiveMarketService: MarketService {
         let selectedUniverse = universeLimit.map { Array(active.prefix($0)) } ?? active
         let universe = Set(selectedUniverse.map(\.symbol))
         let mapped = rows.filter { universe.contains($0.symbols.symbol) }.map { row in
-            MarketSignal(id: row.id, journeyID: row.journey_id, symbol: row.symbols.symbol, name: row.symbols.base_asset, iconURL: row.symbols.icon_url, price: row.symbols.current_price ?? row.signal_price, change24h: row.symbols.price_change_percent_24h ?? 0, quoteVolume24h: row.symbols.quote_volume_24h ?? 0, confidence: row.breakout_confidence_score, falseBreakoutRisk: row.false_breakout_risk, activityScore: row.market_activity_score, volumeRatio: row.volume_ratio, takerBuyRatio: row.taker_buy_ratio, estimatedDelta: row.estimated_volume_delta, status: status(row.status), signalDate: row.signal_time, explanation: row.explanation, evidence: row.explanation_facts)
+            MarketSignal(id: row.id, journeyID: row.journey_id, symbol: row.symbols.symbol, name: row.symbols.base_asset, iconURL: row.symbols.icon_url, price: row.symbols.current_price ?? row.signal_price, change24h: row.symbols.price_change_percent_24h ?? 0, quoteVolume24h: row.symbols.quote_volume_24h ?? 0, confidence: row.breakout_confidence_score, falseBreakoutRisk: row.false_breakout_risk, activityScore: row.market_activity_score, volumeRatio: row.volume_ratio, takerBuyRatio: row.taker_buy_ratio, estimatedDelta: row.estimated_volume_delta, status: status(row.status), signalDate: row.signal_time, explanation: row.explanation, evidence: row.explanation_facts, trendScore: row.trend_score, trendEntry: row.trend_entry ?? false)
         }
         var seenSymbols = Set<String>()
         let signals = mapped
