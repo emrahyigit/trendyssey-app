@@ -182,7 +182,7 @@ Deno.test("forming candle is outside the engine contract", () => {
   const candles = baseline(170);
   const result = marketStateObservation(candles, "4h")!;
   assertEquals(result.candleCloseTime, candles.at(-1)!.closeTime);
-  assertEquals(result.scoringVersion, "market-state-v5.2-control");
+  assertEquals(result.scoringVersion, "market-state-v6-evidence");
 });
 
 Deno.test("market-state window adapts to every supported timeframe", () => {
@@ -258,16 +258,16 @@ Deno.test("readiness reads location and coiling, not the absorption beside it", 
 
 Deno.test("an empty market is low participation, not balanced", () => {
   assertEquals(
-    classifyMarketState(inertMetrics()),
-    { state: "low_participation", stateScore: 20 },
+    classifyMarketState(inertMetrics()).state,
+    "low_participation",
   );
 });
 
 Deno.test("an active market with no clear claim is balanced, not neutral", () => {
   const metrics = inertMetrics({ sellerPressure: 58, buyerPressure: 54 });
   assertEquals(
-    classifyMarketState(metrics),
-    { state: "balanced", stateScore: 58 },
+    classifyMarketState(metrics).state,
+    "balanced",
   );
 });
 
@@ -279,8 +279,8 @@ Deno.test("selling that stops landing reads as impact fading", () => {
     downsideResponse: 25,
   });
   assertEquals(
-    classifyMarketState(metrics, "seller_dominance"),
-    { state: "seller_impact_fading", stateScore: 70 },
+    classifyMarketState(metrics, "seller_dominance").state,
+    "seller_impact_fading",
   );
 });
 
@@ -292,8 +292,8 @@ Deno.test("buying that stops landing mirrors it", () => {
     upsideResponse: 25,
   });
   assertEquals(
-    classifyMarketState(metrics, "buyer_dominance"),
-    { state: "buyer_impact_fading", stateScore: 70 },
+    classifyMarketState(metrics, "buyer_dominance").state,
+    "buyer_impact_fading",
   );
 });
 
@@ -304,8 +304,8 @@ Deno.test("intensity dying after a sell-off reads as seller exhaustion", () => {
     downsideResponse: 20,
   });
   assertEquals(
-    classifyMarketState(metrics, "seller_impact_fading"),
-    { state: "seller_exhaustion", stateScore: 70 },
+    classifyMarketState(metrics, "seller_impact_fading").state,
+    "seller_exhaustion",
   );
   // Without a preceding sell-off there is nothing to be exhausted from.
   assertEquals(
@@ -326,8 +326,8 @@ Deno.test("control changing hands outranks the absorption it grew out of", () =>
     bullishConfirmation: 70,
   });
   assertEquals(
-    classifyMarketState(metrics, "buy_side_absorption"),
-    { state: "buyer_takeover", stateScore: 70 },
+    classifyMarketState(metrics, "buy_side_absorption").state,
+    "buyer_takeover",
   );
 });
 
@@ -360,8 +360,8 @@ Deno.test("sellers retaking control after a rally mirrors the buyer path", () =>
     bearishConfirmation: 70,
   });
   assertEquals(
-    classifyMarketState(metrics, "sell_side_absorption"),
-    { state: "seller_takeover", stateScore: 70 },
+    classifyMarketState(metrics, "sell_side_absorption").state,
+    "seller_takeover",
   );
 });
 
@@ -372,12 +372,57 @@ Deno.test("absorption holds through a weaker reading once it is established", ()
     buySideAbsorption: 58,
   });
   assertEquals(
-    classifyMarketState(metrics, "buy_side_absorption"),
-    { state: "buy_side_absorption", stateScore: 58 },
+    classifyMarketState(metrics, "buy_side_absorption").state,
+    "buy_side_absorption",
   );
   // The same reading is not strong enough to declare absorption from scratch.
   assertEquals(
     classifyMarketState(metrics, "balanced").state,
     "balanced",
+  );
+});
+
+Deno.test("every state scores on the same scale", () => {
+  // A reading that only just clears its bar sits at the bottom of the band,
+  // and one that clears every condition outright sits at the top — whichever
+  // state it is. Before this, dominance averaged 90 and absorption could not
+  // pass 93, so one threshold could never mean the same thing twice.
+  const barelyDominant = inertMetrics({
+    sellerPressure: 60, downsideResponse: 50, sellerEfficiency: 50,
+  });
+  const barelyAbsorbing = inertMetrics({
+    sellerPressure: 55, sellerEfficiency: 45, buySideAbsorption: 55,
+  });
+  for (const metrics of [barelyDominant, barelyAbsorbing]) {
+    const { stateScore } = classifyMarketState(metrics, "buy_side_absorption");
+    assert(
+      stateScore >= 45 && stateScore <= 60,
+      `a bare qualification should sit near 50, got ${stateScore}`,
+    );
+  }
+
+  const emphatic = classifyMarketState(inertMetrics({
+    sellerPressure: 100, downsideResponse: 100, sellerEfficiency: 100,
+  }));
+  assertEquals(emphatic.state, "seller_dominance");
+  assertEquals(emphatic.stateScore, 100);
+});
+
+Deno.test("a thin market that still moves price is not quiet", () => {
+  // PROM on 15m: barely any flow on either side, yet price had travelled and
+  // buyers were converting it efficiently. Flow alone called that asleep.
+  const thinButMoving = inertMetrics({
+    sellerPressure: 14,
+    buyerPressure: 31,
+    buyerEfficiency: 61,
+    upsideResponse: 48,
+    buyerEfficiencyTrend: 30,
+  });
+  assert(classifyMarketState(thinButMoving).state !== "low_participation");
+
+  const genuinelyAsleep = inertMetrics({ sellerPressure: 14, buyerPressure: 31 });
+  assertEquals(
+    classifyMarketState(genuinelyAsleep).state,
+    "low_participation",
   );
 });

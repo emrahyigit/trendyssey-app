@@ -15,7 +15,7 @@
 
 import { atr, ema, type MarketCandle } from "./indicators.ts";
 
-export const MARKET_STATE_SCORING_VERSION = "market-state-v5.2-control";
+export const MARKET_STATE_SCORING_VERSION = "market-state-v6-evidence";
 
 // Short timeframes need a wider sample to suppress single-candle noise, while
 // long timeframes need a tighter sample so the declared state does not lag by
@@ -500,6 +500,39 @@ function familyOf(state: MarketState | null | undefined): "sell" | "buy" | null 
  * swinging and missing" is the shadow of "buyers are in control", and the
  * second sentence is the one worth saying.
  */
+/**
+ * How far past its own entry bar a reading sits, on a scale every state shares:
+ * 50 means it only just qualified, 100 means it cleared every condition by the
+ * widest possible margin.
+ *
+ * The old score took whichever ingredient happened to look best, and each state
+ * picked a different ingredient — so the number meant something different in
+ * every state. Measured over 14k observations dominance averaged 90 while
+ * absorption averaged 65 and could not exceed 93, which meant a single
+ * "minimum score" filter admitted nearly every dominance and almost no
+ * absorption, even though absorption is the earlier reversal signal. Averaging
+ * the margins instead of taking their maximum also stops one strong ingredient
+ * from carrying a reading that barely qualified on the rest.
+ */
+function evidenceScore(margins: number[]): number {
+  if (margins.length === 0) return 50;
+  const mean = margins.reduce((sum, value) => sum + clamp(value), 0) /
+    margins.length;
+  return Math.round(50 + 50 * mean);
+}
+
+/** Headroom above a floor condition, as a 0-1 fraction of what was available. */
+const over = (value: number, floor: number) =>
+  clamp((value - floor) / Math.max(100 - floor, 1));
+
+/** Headroom below a ceiling condition. */
+const under = (value: number, ceiling: number) =>
+  clamp((ceiling - value) / Math.max(ceiling, 1));
+
+/** Headroom past a negative trend threshold, measured over a 40-point span. */
+const beyond = (value: number, threshold: number) =>
+  clamp((threshold - value) / 40);
+
 function claimFor(
   side: SideView,
   previousState: MarketState | null | undefined,
@@ -515,7 +548,12 @@ function claimFor(
   ) {
     return {
       state: side.states.counterTakeover,
-      stateScore: Math.max(side.counterEfficiency, side.counterConfirmation),
+      stateScore: evidenceScore([
+        over(side.counterEfficiency, 55),
+        over(side.counterResponse, 45),
+        clamp((side.counterEfficiencyTrend - 8) / 40),
+        over(side.counterConfirmation, 50),
+      ]),
       rank: 5,
     };
   }
@@ -526,7 +564,11 @@ function claimFor(
   ) {
     return {
       state: side.states.exhaustion,
-      stateScore: Math.max(100 - side.pressure, -side.pressureTrend),
+      stateScore: evidenceScore([
+        beyond(side.pressureTrend, -12),
+        under(side.pressure, 45),
+        under(side.response, 40),
+      ]),
       rank: 4,
     };
   }
@@ -541,7 +583,11 @@ function claimFor(
   ) {
     return {
       state: side.states.absorption,
-      stateScore: side.absorbedBy,
+      stateScore: evidenceScore([
+        over(side.absorbedBy, 55),
+        over(side.pressure, 55),
+        under(side.efficiency, 45),
+      ]),
       rank: 3,
     };
   }
@@ -551,14 +597,22 @@ function claimFor(
   ) {
     return {
       state: side.states.impactFading,
-      stateScore: Math.max(side.pressure, 100 - side.efficiency),
+      stateScore: evidenceScore([
+        over(side.pressure, 55),
+        under(side.efficiency, 45),
+        beyond(side.efficiencyTrend, -8),
+      ]),
       rank: 1,
     };
   }
   if (side.pressure >= 60 && side.response >= 50 && side.efficiency >= 50) {
     return {
       state: side.states.dominance,
-      stateScore: Math.max(side.pressure, side.response),
+      stateScore: evidenceScore([
+        over(side.pressure, 60),
+        over(side.response, 50),
+        over(side.efficiency, 50),
+      ]),
       rank: 2,
     };
   }
@@ -617,10 +671,33 @@ export function classifyMarketState(
     metrics.sellerPressure,
     metrics.buyerPressure,
   );
-  if (strongestPressure < 40) {
-    return { state: "low_participation", stateScore: strongestPressure };
+  const strongestResponse = Math.max(
+    metrics.downsideResponse,
+    metrics.upsideResponse,
+  );
+  // Quiet has to mean both things: little flow AND price going nowhere. Judging
+  // it on flow alone called PROM "quiet" while price had travelled 48 and
+  // buyers were converting at 61 — a thin market can still move, and saying it
+  // is asleep contradicts what the same card shows underneath.
+  if (strongestPressure < 40 && strongestResponse < 40) {
+    return {
+      state: "low_participation",
+      stateScore: evidenceScore([
+        under(strongestPressure, 40),
+        under(strongestResponse, 40),
+      ]),
+    };
   }
-  return { state: "balanced", stateScore: strongestPressure };
+  // Balanced argues from two things at once: both sides genuinely present, and
+  // neither of them ahead.
+  const gap = Math.abs(metrics.sellerPressure - metrics.buyerPressure);
+  return {
+    state: "balanced",
+    stateScore: evidenceScore([
+      over(Math.min(metrics.sellerPressure, metrics.buyerPressure), 40),
+      under(gap, 40),
+    ]),
+  };
 }
 
 export function marketStateObservation(

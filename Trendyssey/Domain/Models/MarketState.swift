@@ -90,63 +90,63 @@ enum MarketStateKind: String, Codable, CaseIterable, Sendable {
         switch self {
         case .sellerDominance:
             L10n.text(
-                "Sellers are hitting hard and getting price for it: each wave of selling is still moving the market lower.",
-                "Satıcılar sert vuruyor ve karşılığını alıyor: her satış dalgası fiyatı hâlâ aşağı taşıyor."
+                "Sellers are hitting hard and getting paid for it — each wave of selling still moves price lower. Nothing here says the fall is finished; the useful reading is that trying to catch it is early.",
+                "Satıcılar sert vuruyor ve karşılığını alıyor — her satış dalgası fiyatı hâlâ aşağı taşıyor. Buradaki hiçbir şey düşüşün bittiğini söylemiyor; asıl okuma şu: yakalamaya çalışmak için erken."
             )
         case .sellerImpactFading:
             L10n.text(
-                "Selling has not slowed down, but it is buying less and less downside. The same effort is producing a smaller move.",
-                "Satış hız kesmedi ama giderek daha az düşüş satın alıyor. Aynı çaba daha küçük bir hareket üretiyor."
+                "Selling has not slowed down, but it is buying less and less downside — the same effort now produces a smaller move. This is the first crack in a sell-off, before any buyer has done anything.",
+                "Satış hız kesmedi ama giderek daha az düşüş satın alıyor — aynı çaba artık daha küçük bir hareket üretiyor. Bu, bir düşüşteki ilk çatlak; henüz hiçbir alıcı bir şey yapmış değil."
             )
         case .buySideAbsorption:
             L10n.text(
-                "Heavy selling keeps arriving and price refuses to follow it down. Someone is taking the other side of it.",
-                "Yoğun satış gelmeye devam ediyor ama fiyat aşağı gitmeyi reddediyor. Birileri bu satışın karşı tarafını alıyor."
+                "Heavy selling keeps arriving and price refuses to follow it down. Someone is taking the other side of every offer, which is what a floor looks like while it is still being built.",
+                "Yoğun satış gelmeye devam ediyor ama fiyat aşağı gitmeyi reddediyor. Birileri her satışın karşı tarafını alıyor — bir taban inşa edilirken tam olarak böyle görünür."
             )
         case .sellerExhaustion:
             L10n.text(
-                "The selling itself is drying up after a sell-off — not absorbed this time, simply no longer coming.",
-                "Satışın kendisi bir düşüşün ardından kuruyor — bu kez emilmiyor, sadece artık gelmiyor."
+                "The selling itself is drying up after a sell-off. This is not absorption — nobody is stepping in front of it — the supply has simply stopped coming, which often leaves price light enough to lift on little.",
+                "Satışın kendisi bir düşüşün ardından kuruyor. Bu absorpsiyon değil — kimse önüne geçmiyor — arz sadece artık gelmiyor. Bu genelde fiyatı az bir şeyle kalkacak kadar hafif bırakır."
             )
         case .buyerTakeover:
             L10n.text(
-                "Buyers are now both efficient and moving price, and closed candles back it up. Control is changing hands.",
-                "Alıcılar artık hem etkili hem de fiyatı taşıyor ve kapanmış mumlar bunu doğruluyor. Kontrol el değiştiriyor."
+                "Buyers are now both efficient and moving price, and closed candles confirm it. Control has changed hands: this is the point the earlier absorption or exhaustion was building toward.",
+                "Alıcılar artık hem verimli hem de fiyatı taşıyor ve kapanmış mumlar bunu doğruluyor. Kontrol el değiştirdi: önceki absorpsiyon ya da tükenişin hazırladığı nokta burası."
             )
         case .buyerDominance:
             L10n.text(
-                "Buyers are pressing hard and getting price for it: each wave of buying is still moving the market higher.",
-                "Alıcılar sert bastırıyor ve karşılığını alıyor: her alım dalgası fiyatı hâlâ yukarı taşıyor."
+                "Buyers are pressing hard and getting paid for it — each wave of buying still moves price higher. The move is working, which also means the good entry was earlier than here.",
+                "Alıcılar sert bastırıyor ve karşılığını alıyor — her alım dalgası fiyatı hâlâ yukarı taşıyor. Hareket çalışıyor; bu aynı zamanda iyi girişin buradan önce olduğu anlamına geliyor."
             )
         case .buyerImpactFading:
             L10n.text(
-                "Buying has not slowed down, but it is buying less and less upside. The same effort is producing a smaller move.",
-                "Alım hız kesmedi ama giderek daha az yükseliş satın alıyor. Aynı çaba daha küçük bir hareket üretiyor."
+                "Buying has not slowed down, but it is buying less and less upside — the same effort now produces a smaller move. This is the first crack in a rally, before any seller has done anything.",
+                "Alım hız kesmedi ama giderek daha az yükseliş satın alıyor — aynı çaba artık daha küçük bir hareket üretiyor. Bu, bir yükselişteki ilk çatlak; henüz hiçbir satıcı bir şey yapmış değil."
             )
         case .sellSideAbsorption:
             L10n.text(
-                "Heavy buying keeps arriving and price refuses to follow it up. Someone is selling into that demand.",
-                "Yoğun alım gelmeye devam ediyor ama fiyat yukarı gitmeyi reddediyor. Birileri bu talebe satış yapıyor."
+                "Heavy buying keeps arriving and price refuses to follow it up. Someone is selling into every bid, which is what a ceiling looks like while it is still being built.",
+                "Yoğun alım gelmeye devam ediyor ama fiyat yukarı gitmeyi reddediyor. Birileri her alışa satış yapıyor — bir tavan inşa edilirken tam olarak böyle görünür."
             )
         case .buyerExhaustion:
             L10n.text(
-                "The buying itself is drying up after a rally — not absorbed this time, simply no longer coming.",
-                "Alımın kendisi bir yükselişin ardından kuruyor — bu kez emilmiyor, sadece artık gelmiyor."
+                "The buying itself is drying up after a rally. Nobody is selling into it — demand has simply stopped arriving, which leaves price unsupported if any supply shows up.",
+                "Alımın kendisi bir yükselişin ardından kuruyor. Kimse içine satmıyor — talep sadece artık gelmiyor. Bu, herhangi bir arz belirirse fiyatı desteksiz bırakır."
             )
         case .sellerTakeover:
             L10n.text(
-                "Sellers are now both efficient and moving price, and closed candles back it up. Control is changing hands.",
-                "Satıcılar artık hem etkili hem de fiyatı taşıyor ve kapanmış mumlar bunu doğruluyor. Kontrol el değiştiriyor."
+                "Sellers are now both efficient and moving price, and closed candles confirm it. Control has changed hands: the rally that was being absorbed has given way.",
+                "Satıcılar artık hem verimli hem de fiyatı taşıyor ve kapanmış mumlar bunu doğruluyor. Kontrol el değiştirdi: emilmekte olan yükseliş teslim oldu."
             )
         case .balanced:
             L10n.text(
-                "Both sides are genuinely active and neither is winning the exchange.",
-                "İki taraf da gerçekten aktif ve hiçbiri bu alışverişi kazanmıyor."
+                "Both sides are on the field and neither has met the bar for a named state. Real two-way trade, no edge to either — the tape has to break one way before it says anything.",
+                "İki taraf da sahada ve hiçbiri isimli bir durumun eşiğini geçmiş değil. Gerçek çift yönlü işlem var, üstünlük yok — bir şey söylemesi için önce bir tarafa kırılması gerekiyor."
             )
         case .lowParticipation:
             L10n.text(
-                "Neither side is doing much. This is stillness, not a standoff — there is little flow to read.",
-                "İki taraf da pek bir şey yapmıyor. Bu bir denge değil, hareketsizlik — okunacak akış çok az."
+                "Little flow on either side and price is going nowhere with it. This is stillness rather than a standoff: there is not enough activity here to read anything from.",
+                "İki tarafta da akış çok az ve fiyat da bununla bir yere gitmiyor. Bu bir çekişme değil, hareketsizlik: buradan bir şey okuyacak kadar aktivite yok."
             )
         }
     }
